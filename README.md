@@ -339,7 +339,8 @@ Run folders can include console memory captures and machine-specific information
 - **ns2jb** — original Switch 2 exploit and FS research: [upstream ns2jb](https://gitlab.com/pepsipu/ns2jb).
 - **libusbd** and **macos_usb_gadget_poc** — USB device emulation and experimental macOS gadget-driver work by [shinyquagsire23](https://github.com/shinyquagsire23).
 - **SocraticBliss** — feedback and guidance that helped simplify USB driver installation, clarify the SIP requirement, and provide a prebuilt-driver setup path.
-- **u/Isacucho** and **[mathisdcco](https://github.com/cpypwn/mac2jb/issues/3)** — keyboard-layout reports that helped clarify the Switch 2 US English USB keyboard requirement, with a user-reported confirmation of the console-setting fix on v0.3.1.
+- **[mathisdcco](https://github.com/mathisdcco)** — reported the AZERTY character substitutions in [issue #3](https://github.com/cpypwn/mac2jb/issues/3) and confirmed that changing the Switch 2 USB keyboard language fixed the issue on v0.3.1, without editing `sender.c`.
+- **u/Isacucho** — reported `#` being typed as `£`, helping highlight the console keyboard-layout requirement.
 - **u/kuksthedefiled** — shared the community-reported SmileBASIC demo save/load workaround, attributed to a Discord discussion; not yet verified here.
 - **ASCII art** — created using [Patorjk's Text to ASCII Art Generator](https://patorjk.com/software/taag/).
 
