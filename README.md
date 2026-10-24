@@ -105,6 +105,7 @@ This recommendation concerns **preserving the tested firmware/software versions*
 ## Prerequisites and important security notes
 
 - An Apple silicon Mac, Nintendo Switch 2, SmileBASIC 4, and a **data-capable** USB-C connection.
+- **Required console keyboard layout:** On the **Switch 2**, open **System Settings → Controllers & Accessories → USB Keyboard** and select **US English** (not UK English or AZERTY). mac2jb sends US-layout USB keycodes regardless of the Mac's keyboard layout. This applies to both bootstrap typing and post-bootstrap commands; you do not need to edit `sender.c` for an AZERTY Mac.
 - **CLI/source builds only:** Xcode Command Line Tools for the senders and Node.js **22 or newer** for the host. The prepared GUI bundles its runtime and tools.
 - **Driver-build fallback only:** full Xcode if you choose to compile the driver instead of using the included prebuilt copy.
 - The pinned vendored sources and `assets/bootstrap.bas`, as included in the complete repository/release archive.
@@ -323,7 +324,7 @@ Replace `MYPROG` with your chosen name. For the ns2jb bootstrap, confirm that th
 | `scripts/host.sh: No such file or directory` | The local release extraction is incomplete. Restore the full `scripts/` directory from the repository; don't overwrite it with an empty one. |
 | USB doesn't enumerate | Check USB data cable, Mac-to-Switch charging direction, selected controller, driver load state, and Switch input focus. Replug if the Mac charges the Switch. |
 | `invalid MAC2JB_CONTROLLER 'auto'` | A version mismatch or launcher bug passed a literal `auto` to the driver. Use an explicit `usb-drdN` value or an updated launcher. |
-| Unexpected characters (`A` becomes `Q`, etc.) | Check the **Switch's USB keyboard layout**, not just the Mac's input layout. mac2jb emits USB HID keycodes directly and assumes a US keyboard layout. |
+| Unexpected characters (`#` becomes `£`, `A` becomes `Q`, etc.), or a syntax error on bootstrap line 1 | Set the **Switch 2's USB Keyboard language to US English** under **System Settings → Controllers & Accessories**. Changing the Mac's layout does not fix it. Clear and resend the corrupted bootstrap after correcting the console setting; other punctuation may also be wrong. No edits to `sender.c` are needed. See [issue #3](https://github.com/cpypwn/mac2jb/issues/3). |
 | Pairing file already exists | The launcher should identify and stop only prior ns2jb hosts belonging to this installation before starting a new session, and clear stale pairing files without killing unrelated processes. Do not start a new attempt while an existing ns2jb session is performing work. |
 | Pairing parameters not published | Check that `scripts/host.sh` and `scripts/host-wrapper.cjs` exist, Node.js works, and the host is not waiting for network-interface selection. |
 | Partially typed code after a disconnect/timeout | Stop and inspect/clear the partial input before retrying; disconnect USB if a key appears stuck. |
@@ -338,6 +339,7 @@ Run folders can include console memory captures and machine-specific information
 - **ns2jb** — original Switch 2 exploit and FS research: [upstream ns2jb](https://gitlab.com/pepsipu/ns2jb).
 - **libusbd** and **macos_usb_gadget_poc** — USB device emulation and experimental macOS gadget-driver work by [shinyquagsire23](https://github.com/shinyquagsire23).
 - **SocraticBliss** — feedback and guidance that helped simplify USB driver installation, clarify the SIP requirement, and provide a prebuilt-driver setup path.
+- **u/Isacucho** and **[mathisdcco](https://github.com/cpypwn/mac2jb/issues/3)** — keyboard-layout reports that helped clarify the Switch 2 US English USB keyboard requirement, with a user-reported confirmation of the console-setting fix on v0.3.1.
 - **u/kuksthedefiled** — shared the community-reported SmileBASIC demo save/load workaround, attributed to a Discord discussion; not yet verified here.
 - **ASCII art** — created using [Patorjk's Text to ASCII Art Generator](https://patorjk.com/software/taag/).
 
