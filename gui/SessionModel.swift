@@ -57,6 +57,7 @@ private struct GUIEvent: Decodable {
     @Published var driverStatus = "Checking the USB gadget driver…"
     @Published var driverInstalled = false
     @Published var driverLoaded = false
+    @Published var driverSetupRunning = false
     @Published var error: String?
     @Published private(set) var diagnosticLogURL: URL?
     private(set) var runtime: BundledRuntime?
@@ -78,6 +79,10 @@ private struct GUIEvent: Decodable {
 
     var isBusy: Bool {
         [.preparing, .bootstrap, .hostStarting, .commands, .waitingForConsole].contains(phase)
+    }
+
+    var canRestartForUpdate: Bool {
+        !isBusy && phase != .awaitingSave && !driverSetupRunning && hostProcess == nil && hidProcess == nil
     }
 
     var shouldShowFirstTimeFooter: Bool {
@@ -144,6 +149,7 @@ private struct GUIEvent: Decodable {
     }
 
     func start() {
+        guard !driverSetupRunning else { return }
         guard !isBusy, phase != .awaitingSave, hostProcess == nil, hidProcess == nil, let runtime else { return }
         guard driverLoaded else { fail("Install/load the USB driver, complete any required restart, then refresh the driver check."); return }
         guard Self.isIPv4(selectedAddress), addresses.contains(where: { $0.address == selectedAddress }) else {
@@ -168,7 +174,7 @@ private struct GUIEvent: Decodable {
         resetBootstrapTiming()
         hostStageLabel = "Waiting for the Switch to connect over the local network"
         hostStageProgress = nil
-        append("mac2jb 0.3.1; controller=\(controller); address=\(selectedAddress); keyDelayMs=\(keyDelayMs); enumerationTimeoutSeconds=\(enumerationTimeoutSeconds); loadConfirmWaitMs=\(loadConfirmWaitMs); loadWaitMs=\(loadWaitMs); runWaitMs=\(runWaitMs); removeWaitMs=\(removeWaitMs). Starting a fresh \(fullInstall ? "full bootstrap" : "post-bootstrap") workflow.")
+        append("mac2jb 0.3.2; controller=\(controller); address=\(selectedAddress); keyDelayMs=\(keyDelayMs); enumerationTimeoutSeconds=\(enumerationTimeoutSeconds); loadConfirmWaitMs=\(loadConfirmWaitMs); loadWaitMs=\(loadWaitMs); runWaitMs=\(runWaitMs); removeWaitMs=\(removeWaitMs). Starting a fresh \(fullInstall ? "full bootstrap" : "post-bootstrap") workflow.")
         if fullInstall { startHID("bootstrap", root: runtime.root) }
         else { startHost(root: runtime.root) }
     }
@@ -481,7 +487,7 @@ private struct GUIEvent: Decodable {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false,
                                                     attributes: [.posixPermissions: 0o700])
             openSessionLog(in: folder)
-            append("mac2jb 0.3.1: runtime preparation diagnostic log.")
+            append("mac2jb 0.3.2: runtime preparation diagnostic log.")
         } catch { diagnosticLogURL = nil }
     }
 

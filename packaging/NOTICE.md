@@ -1,4 +1,4 @@
-# mac2jb 0.3.1 packaging
+# mac2jb 0.3.2 packaging
 
 The app and complete source distribution include the tested unsigned local
 `usbgadget.kext` build, with hashes and provenance in `drivers/README.md`.

@@ -7,14 +7,16 @@ private let mist = Color(red: 0.95, green: 0.97, blue: 0.96)
 
 struct ContentView: View {
     @ObservedObject var model: SessionModel
+    @ObservedObject var updater: AppUpdater
     @State private var readyConfirmed = false
     @State private var savedConfirmed = false
     @State private var showLogs = false
     @State private var activityTab = 0
     @State private var driverMessage: String?
-    @State private var driverLoading = false
+    @State private var confirmUpdate = false
     @State private var showFailure = false
     @State private var failureText = ""
+    @State private var showUpdateFailure = false
     private var canConfigure: Bool {
         [.ready, .failed, .cancelled].contains(model.phase)
     }
@@ -44,6 +46,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     header
+                    if updater.state != .idle { updateStatus }
                     if canConfigure { setup }
                     else { activeSession }
                     activity
@@ -58,6 +61,7 @@ struct ContentView: View {
         .tint(teal)
         .onAppear {
             model.prepare()
+            updater.start()
             NSApp.activate(ignoringOtherApps: true)
         }
         .onChange(of: model.phase) { _, phase in
@@ -72,6 +76,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: model.fullInstall) { _, _ in readyConfirmed = false }
+        .onChange(of: updater.state) { _, state in if state == .failed { showUpdateFailure = true } }
         .alert("The session needs attention", isPresented: $showFailure) {
             if model.diagnosticLogURL != nil {
                 Button("Open logs") { model.revealSessionFolder() }
@@ -81,6 +86,58 @@ struct ContentView: View {
         .alert("USB driver", isPresented: Binding(get: { driverMessage != nil }, set: { if !$0 { driverMessage = nil } })) {
             Button("OK") { driverMessage = nil }
         } message: { Text(driverMessage ?? "") }
+        .alert("The update needs attention", isPresented: $showUpdateFailure) {
+            if updater.diagnosticURL != nil { Button("Open update log") { updater.revealLog() } }
+            Button("Close", role: .cancel) {}
+        } message: {
+            Text(updater.message + (updater.diagnosticURL.map { "\n\nLog saved at:\n" + $0.path } ?? ""))
+        }
+        .confirmationDialog("Restart and update mac2jb?", isPresented: $confirmUpdate) {
+            Button("Restart & update") {
+                updater.install(canRestart: model.canRestartForUpdate) {
+                    model.recordDiagnostic("Restarting mac2jb to install the verified update.")
+                }
+            }
+        } message: {
+            Text("The app will close, install the verified release, and reopen. Your logs and driver are kept. The previous app is saved as a backup.")
+        }
+    }
+
+    private var updateStatus: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(updater.message).font(.system(size: 12, weight: .medium)).foregroundStyle(ink)
+            if updater.state == .downloading { ProgressView(value: updater.progress).tint(teal) }
+            HStack {
+                if updater.state == .available {
+                    Button("Download update") { updater.download() }.buttonStyle(.borderedProminent)
+                }
+                if updater.state == .ready {
+                    Button("Restart & update") { confirmUpdate = true }
+                        .buttonStyle(.borderedProminent).disabled(!model.canRestartForUpdate)
+                    if !model.canRestartForUpdate {
+                        Text("Available after the current session or driver setup finishes.")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
+                }
+                if let release = updater.candidate?.releaseURL {
+                    Link("Release notes ↗", destination: release)
+                }
+                if updater.state == .failed {
+                    Button("Try again") { updater.dismiss(); updater.check() }
+                    Link("Open releases ↗", destination: URL(string: "https://github.com/cpypwn/mac2jb/releases/latest")!)
+                    if updater.hasDownloadedApp { Button("Show downloaded app") { updater.revealDownloadedApp() } }
+                    if let log = updater.diagnosticURL {
+                        Button("Open update log") { updater.revealLog() }
+                        Text(log.path).font(.system(size: 9)).textSelection(.enabled)
+                    }
+                }
+                Spacer(minLength: 0)
+                if updater.state == .current || updater.state == .failed {
+                    Button("Dismiss") { updater.dismiss() }.buttonStyle(.plain)
+                }
+            }.font(.system(size: 11))
+        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var sidebar: some View {
@@ -95,7 +152,7 @@ struct ContentView: View {
                 step(2, "Run & verify", "Host and commands")
             }.padding(.top, 55)
             Spacer(minLength: 40)
-            Text("v0.3.1")
+            Text("v0.3.2")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.35))
         }
@@ -221,8 +278,8 @@ struct ContentView: View {
                             Text(model.driverStatus).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer()
-                        Button(driverLoading ? "Installing…" : "Install & load driver…") { loadDriver() }
-                            .font(.system(size: 11)).disabled(driverLoading || model.runtime == nil)
+                        Button(model.driverSetupRunning ? "Installing…" : "Install & load driver…") { loadDriver() }
+                            .font(.system(size: 11)).disabled(model.driverSetupRunning || model.runtime == nil)
                     }
                     Group {
                         if model.fullInstall {
@@ -244,7 +301,7 @@ struct ContentView: View {
                                 .padding(.horizontal, 10).padding(.vertical, 6)
                         }
                         .buttonStyle(PrimaryActionStyle()).fixedSize()
-                        .disabled(!readyConfirmed || model.selectedAddress.isEmpty || model.runtime == nil || !model.driverLoaded || !timingSettingsValid)
+                        .disabled(!readyConfirmed || model.selectedAddress.isEmpty || model.runtime == nil || !model.driverLoaded || !timingSettingsValid || model.driverSetupRunning || updater.blocksNewSession)
                     }
                 }
             }
@@ -422,7 +479,7 @@ struct ContentView: View {
     }
     private func loadDriver() {
         guard let runtime = model.runtime else { return }
-        driverLoading = true
+        model.driverSetupRunning = true
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         let script = runtime.root.appendingPathComponent("scripts/install-driver.sh").path
@@ -435,7 +492,7 @@ struct ContentView: View {
         task.terminationHandler = { task in
             let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             DispatchQueue.main.async {
-                driverLoading = false
+                model.driverSetupRunning = false
                 model.refreshChecks()
                 model.recordDiagnostic("Driver installer:\n" + output)
                 driverMessage = task.terminationStatus == 0
@@ -444,7 +501,7 @@ struct ContentView: View {
             }
         }
         do { try task.run() }
-        catch { driverLoading = false; driverMessage = error.localizedDescription }
+        catch { model.driverSetupRunning = false; driverMessage = error.localizedDescription }
     }
 }
 

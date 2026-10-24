@@ -14,15 +14,17 @@ mac2jb is responsible for the **Mac-side USB keyboard emulation, SmileBASIC boot
 
 **Repeated failures at `2/4 Acquiring FS memory` are a known ns2jb acquisition issue.** Several attempts may fail before one succeeds, and success is not guaranteed. If USB typing completed, the host connected, and ns2jb reached this stage, a subsequent acquisition failure is an ns2jb-stage issue, not by itself a mac2jb typing failure. See [upstream acquisition reports](https://gitlab.com/pepsipu/ns2jb/-/issues/1).
 
+**Users have reported higher success rates with the Switch 2 connected over Ethernet rather than Wi-Fi.** If available, try Ethernet for the console's network connection. This is community-reported and does not guarantee that ns2jb acquisition will succeed.
+
 **Restart the Switch 2 before every retry of the post-bootstrap workflow.** After a failed attempt, restart the console, open SmileBASIC, enter Direct mode, and start a fresh **NS2 already saved / Post-bootstrap only** session. Do not simply resend the commands or run `REMOVE` again in the same application process. A correctly saved NS2 does not need to be retransmitted just because acquisition failed. Please direct acquisition-stage reports to upstream ns2jb rather than requesting mac2jb support for them.
 
 Use at your own risk. mac2jb is provided without a guarantee of compatibility, exploit success, or protection against data loss, system instability, or service restrictions. This support statement does not override applicable licenses or legal rights.
 
 ## Source provenance, licensing, and session security
 
-### v0.3.1 GUI
+### v0.3.2 GUI
 
-Download the native Mac GUI from [the v0.3.1 release](https://github.com/cpypwn/mac2jb/releases/tag/v0.3.1), or build it with `make gui` and open
+Download the native Mac GUI from [the v0.3.2 release](https://github.com/cpypwn/mac2jb/releases/tag/v0.3.2), or build it with `make gui` and open
 `build/mac2jb.app`; see [the GUI guide](docs/GUI-DEMO.md) for setup,
 automation limits, and logging. Its single executable embeds Node.js, the
 senders, and the offline host, so users of the built app need no build tools
@@ -35,6 +37,16 @@ terminal workflow. GUI work does not change the vendored exploit runtime.
 GUI failures display the diagnostic log's exact path and an **Open logs**
 button. Session files stay in private per-launch folders outside the checkout;
 build folders and repository-local logs are also ignored by Git.
+
+### GUI updates
+
+Starting with v0.3.2, the GUI checks for newer stable GitHub releases automatically at launch (at most once every six hours) and daily while open. Use **mac2jb → Check for Updates…** at any time, or turn automatic checks off in that menu. An available update appears in the window; choose **Download update**, then **Restart & update** when ready.
+
+Updates verify the release's GitHub SHA-256 digests, published checksum file, archive paths, app identity/version, Apple Silicon executable, and code-signature integrity. Installation waits until no payload session, save checkpoint, worker process, or driver installation is active. It preserves a sibling `mac2jb-backup-<UUID>.app` and restores the old app if replacement fails. Update diagnostics are appended to a private `update.log` under `~/Library/Application Support/mac2jb/Updates/<UUID>/`; a failure shows its location. Keep the backup until the new version works.
+
+The updater replaces the GUI app in its current writable folder. It does not install/update the kernel driver, change SIP or security policy, or remove session logs. Move the app out of a read-only/translocated location before updating. The update source is the public `cpypwn/mac2jb` GitHub release over HTTPS; checksums and ad-hoc signature integrity do not provide a separate publisher-signing identity. Normal macOS app security checks still apply.
+
+**v0.3.1 and earlier require a manual download of v0.3.2 once** to gain the updater. Only higher stable version numbers are offered; prereleases and downgrades are excluded. The CLI/source checkout is updated separately through Git or the source download.
 
 The repository root `LICENSE` applies to mac2jb's MIT-licensed code and does **not**
 relicense third-party material. `vendor/libusbd/LICENSE` and

@@ -1,6 +1,6 @@
-# mac2jb 0.3.1 GUI
+# mac2jb 0.3.2 GUI
 
-v0.3.1 is the active release. A completed Mac-side transfer does not prove that the console accepted the input or that ns2jb succeeded; the host independently verifies execution, restoration, and cleanup.
+v0.3.2 is the active release. A completed Mac-side transfer does not prove that the console accepted the input or that ns2jb succeeded; the host independently verifies execution, restoration, and cleanup.
 
 ## Run the app
 
@@ -42,6 +42,12 @@ The GUI cannot inspect the Switch screen, verify a saved program, operate macOS 
 6. On the **Switch 2**, set **System Settings → Controllers & Accessories → USB Keyboard → US English**. This is required for bootstrap typing and post-bootstrap commands. The Mac's physical keyboard/input layout does not affect mac2jb's US-layout USB keycodes. If `#` appeared as `£` or letters were substituted, correct the console setting, clear the corrupted bootstrap, and resend it; you do not need to edit `sender.c`.
 
 Once a compatible driver is installed, approved, and loaded, the prepared application removes the need to build senders, install Node.js, open Terminal windows, copy pairing commands, or choose a controller by trial and error at the command line. The console-side preparation and verification checkpoints remain necessary.
+
+## GUI updates
+
+Use **mac2jb → Check for Updates…**, or leave **Check for Updates Automatically** enabled. Automatic checks run at launch if at least six hours have passed since the last successful check, then daily while the app stays open. Choose **Download update** and, after the current session/driver work finishes, **Restart & update**. The app verifies the download and app bundle, keeps a backup of the old app, and reopens the new version. A failed replacement restores the old app; errors show the private updater log path.
+
+Updating affects the app only. Drivers, Recovery settings, and existing session logs are left in place. Your app folder must be writable; macOS security checks remain in effect. The updater trusts the public mac2jb GitHub repository over HTTPS and validates GitHub digests and the release checksum file; the app remains ad-hoc signed. Users on v0.3.1 or earlier must download v0.3.2 manually once. The CLI is updated separately.
 
 ## Session data and distribution
 

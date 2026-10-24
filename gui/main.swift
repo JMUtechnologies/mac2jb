@@ -2,6 +2,12 @@ import AppKit
 import SwiftUI
 import Foundation
 
+// The detached installer must run before constructing the GUI or session.
+if CommandLine.arguments.dropFirst().first == "--finish-update" {
+    guard CommandLine.arguments.count == 3 else { exit(2) }
+    exit(UpdateInstaller.finish(planURL: URL(fileURLWithPath: CommandLine.arguments[2])))
+}
+
 // Hardware-free verification is also available from the single executable.
 if CommandLine.arguments.contains("--self-test") {
     do {
@@ -31,7 +37,7 @@ if CommandLine.arguments.contains("--self-test") {
                               userInfo: [NSLocalizedDescriptionKey: "Check failed: \(tool)"])
             }
         }
-        print("mac2jb 0.3.1: embedded runtime and dry-run checks passed; no USB input sent.")
+        print("mac2jb 0.3.2: embedded runtime and dry-run checks passed; no USB input sent.")
         try? FileManager.default.removeItem(at: testParent)
         exit(0)
     } catch {
@@ -42,9 +48,10 @@ if CommandLine.arguments.contains("--self-test") {
 
 struct Mac2jbApp: App {
     @StateObject private var model = SessionModel()
+    @StateObject private var updater = AppUpdater()
     var body: some Scene {
         WindowGroup("mac2jb") {
-            ContentView(model: model)
+            ContentView(model: model, updater: updater)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     model.cancel()
                 }
@@ -53,6 +60,10 @@ struct Mac2jbApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.check() }.disabled(updater.isWorking)
+                Toggle("Check for Updates Automatically", isOn: $updater.checksAutomatically)
+            }
         }
     }
 }

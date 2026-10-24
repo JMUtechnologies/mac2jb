@@ -142,7 +142,7 @@ with archive.open('wb') as stream, gzip.GzipFile(filename='', mode='wb', fileobj
             else: raise SystemExit('Unsupported archive file: '+relative)
 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 (build/'PayloadMetadata.swift').write_text('enum EmbeddedPayloadMetadata { static let sha256 = '+json.dumps(digest)+' }\n')
-with zipfile.ZipFile(build/'mac2jb-0.3.1-source.zip', 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
+with zipfile.ZipFile(build/'mac2jb-0.3.2-source.zip', 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
     for path in sorted((payload/'source').rglob('*')):
         if path.is_file(): zipped.write(path, 'mac2jb/'+path.relative_to(payload/'source').as_posix())
 print('Embedded runtime SHA-256:', digest)
@@ -167,4 +167,4 @@ mkdir -p "$(dirname "$APP_OUTPUT")"
 if [[ -e "$APP_OUTPUT" ]]; then rm -rf "$APP_OUTPUT"; fi
 mv "$STAGE/mac2jb.app" "$APP_OUTPUT"
 echo "Created GUI app: $APP_OUTPUT"
-echo "Corresponding source: $BUILD/mac2jb-0.3.1-source.zip"
+echo "Corresponding source: $BUILD/mac2jb-0.3.2-source.zip"
