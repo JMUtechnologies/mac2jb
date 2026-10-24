@@ -12,6 +12,10 @@ mac2jb is responsible for the **Mac-side USB keyboard emulation, SmileBASIC boot
 
 **Support boundary:** I can investigate issues with mac2jb's installation, controller selection, USB enumeration, character transmission, launcher, and handoff to the host. **Once mac2jb has delivered its commands and ns2jb is executing its own stages, ns2jb-specific failures are outside the scope of mac2jb support.** Please consult the [upstream ns2jb project](https://gitlab.com/pepsipu/ns2jb) for details about its internals and acquisition or execution failures. I cannot provide individual troubleshooting for ns2jb itself.
 
+**Repeated failures at `2/4 Acquiring FS memory` are a known ns2jb acquisition issue.** Several attempts may fail before one succeeds, and success is not guaranteed. If USB typing completed, the host connected, and ns2jb reached this stage, a subsequent acquisition failure is an ns2jb-stage issue, not by itself a mac2jb typing failure. See [upstream acquisition reports](https://gitlab.com/pepsipu/ns2jb/-/issues/1).
+
+**Restart the Switch 2 before every retry of the post-bootstrap workflow.** After a failed attempt, restart the console, open SmileBASIC, enter Direct mode, and start a fresh **NS2 already saved / Post-bootstrap only** session. Do not simply resend the commands or run `REMOVE` again in the same application process. A correctly saved NS2 does not need to be retransmitted just because acquisition failed. Please direct acquisition-stage reports to upstream ns2jb rather than requesting mac2jb support for them.
+
 Use at your own risk. mac2jb is provided without a guarantee of compatibility, exploit success, or protection against data loss, system instability, or service restrictions. This support statement does not override applicable licenses or legal rights.
 
 ## Source provenance, licensing, and session security
@@ -71,8 +75,6 @@ The maintainer's successful end-to-end test used:
 | Switch operation | Docked and undocked |
 | Switch USB-C ports | Top and bottom tested |
 | macOS USB gadget driver | `gay.bowser.usbgadget` / `usbgadget.kext` (1.01 observed) |
-
-The initial complete ns2jb hardware test succeeded on the **third fresh console boot**; the earlier attempts failed validation and cleaned up. Successful operation on other Macs, system versions, or SmileBASIC versions has not been verified.
 
 ### Tested Mac USB controller mapping
 
