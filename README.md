@@ -8,7 +8,7 @@ mac2jb bundles or references upstream work from [libusbd](https://github.com/shi
 
 ## What it does and where support ends
 
-mac2jb is responsible for the **Mac-side USB keyboard emulation, SmileBASIC bootstrap transfer, command transmission, and orchestration of the locally bundled ns2jb host**. It does not implement or modify ns2jb's exploit logic. The vendored ns2jb runtime and exploit implementation are unchanged from the pinned upstream revision. mac2jb's own host wrapper, launcher, and integration scripts are separate files.
+mac2jb is responsible for the **Mac-side USB keyboard emulation, SmileBASIC bootstrap transfer, command transmission, and orchestration of the locally bundled ns2jb host**. It does not implement or modify ns2jb's exploit logic. The vendored ns2jb runtime, exploit implementation, and tests are unchanged from the pinned upstream revision; mac2jb's own host wrapper, launcher, and integration scripts are separate files.
 
 **Support boundary:** I can investigate issues with mac2jb's installation, controller selection, USB enumeration, character transmission, launcher, and handoff to the host. **Once mac2jb has delivered its commands and ns2jb is executing its own stages, ns2jb-specific failures are outside the scope of mac2jb support.** Please consult the [upstream ns2jb project](https://gitlab.com/pepsipu/ns2jb) for details about its internals and acquisition or execution failures. I cannot provide individual troubleshooting for ns2jb itself.
 
@@ -58,7 +58,8 @@ macOS backend and build are recorded inside their respective modified files.
 
 `vendor/ns2jb` is pinned to an upstream revision with its original source and
 tests. Its `README.md` checksum is corrected to match the pinned file. The
-runtime and exploit logic are unchanged. Separate redistribution and third-party rights must be
+runtime and exploit logic are unchanged. Separate
+redistribution and third-party rights must be
 reviewed before public releases. The vendored
 `macos_usb_gadget_poc` material is intentionally **trimmed** to its documented
 MIT-licensed `usbgadget/` kernel-extension source/Xcode project. It excludes the
@@ -66,9 +67,12 @@ unused `usb_device/` proof of concept and the precompiled `.kext` bundle.
 `upstream.lock` identifies the origin and commit, not a guarantee that every
 vendored project is an untouched full checkout.
 
-**Session logs:** Pairing commands are printed in full. Generated run files
-and logs are excluded from Git and source ZIPs and use user-only permissions.
-To discard old host logs after the host has stopped, run
+**Session logs:** The GUI displays and records complete `V=START(...)` pairing
+commands, matching the CLI. Logs and generated run files are excluded from Git
+and source ZIPs and use user-only directory/file permissions. The CLI host keeps
+its files under `vendor/ns2jb/runs/`; the GUI keeps them in its per-launch
+Application Support session folder. To discard old CLI host logs after the host
+has stopped, run
 `bash scripts/clear-session-logs.sh` (it leaves the current pairing file alone).
 
 The complete source distribution includes the tested unsigned driver in `drivers/usbgadget.kext`, its checksums and provenance, and the source-build fallback. `make` alone does not install the driver.
@@ -266,7 +270,7 @@ The launcher attempts the tested controllers (`usb-drd0`, `usb-drd1`, `usb-drd3`
 
 If enumeration fails, check that the cable supports data, verify that the Switch is not being charged by the Mac, and reconnect the cable. **Do not automatically retry a partially completed text transfer:** clear the input and assess the session first to avoid duplicate commands.
 
-During post-bootstrap transmission, the launcher prints each command being sent, including the current host's full `V=START(...)` values for comparison with the console. Use the pairing values from the current host launch rather than a previous session.
+During post-bootstrap transmission, the launcher prints each command being sent, including the current host's full `V=START(...)` values for comparison with the console. The GUI also preserves the full command in its activity view and logs. Pairing values are generated for each host launch; use the values from the current host rather than a previous session.
 
 **Important:** HID completion is not the same as confirmation of command execution. If the launcher reports that commands were sent, inspect the Switch and the separate ns2jb host window for the actual result. Do not treat an automatic transfer or a Terminal success message as proof of a successful exploit.
 

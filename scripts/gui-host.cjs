@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// Native GUI adapter. Preserve the host's command output in GUI diagnostics.
+// Native GUI adapter. Keep the audited ns2jb snapshot unchanged and preserve
+// the host's command output in the GUI's diagnostic stream.
 process.umask(0o077);
 const fs = require('node:fs');
 const path = require('node:path');

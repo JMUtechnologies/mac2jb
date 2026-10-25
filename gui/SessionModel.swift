@@ -391,11 +391,10 @@ private struct GUIEvent: Decodable {
         // later cancellation/exit callback must not infer it from .failed.
         workflowProgress.fail()
         endSessionActivity()
-        let clean = message
         ensureFallbackLog()
-        error = clean; phase = .failed; status = "The session needs attention"
-        detail = clean; progress = nil; progressLabel = ""; isEnumerating = false
-        append(clean)
+        error = message; phase = .failed; status = "The session needs attention"
+        detail = message; progress = nil; progressLabel = ""; isEnumerating = false
+        append(message)
         appendBootstrapDuration(outcome: "failed")
         stopWorkers()
     }
@@ -447,15 +446,15 @@ private struct GUIEvent: Decodable {
     private enum LogChannel { case host, usb }
 
     private func append(_ message: String, channel: LogChannel? = nil) {
-        let clean = message + "\n"
-        log += clean
-        if let bytes = clean.data(using: .utf8) { try? sessionLog?.write(contentsOf: bytes) }
+        let line = message + "\n"
+        log += line
+        if let bytes = line.data(using: .utf8) { try? sessionLog?.write(contentsOf: bytes) }
         if let channel {
             switch channel {
             case .host:
-                hostLog += clean; try? hostSessionLog?.write(contentsOf: clean.data(using: .utf8)!)
+                hostLog += line; try? hostSessionLog?.write(contentsOf: line.data(using: .utf8)!)
             case .usb:
-                usbLog += clean; try? usbSessionLog?.write(contentsOf: clean.data(using: .utf8)!)
+                usbLog += line; try? usbSessionLog?.write(contentsOf: line.data(using: .utf8)!)
             }
         }
         if log.utf8.count > 50000 { log = String(log.suffix(40000)) }

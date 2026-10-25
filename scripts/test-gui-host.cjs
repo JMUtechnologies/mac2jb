@@ -99,6 +99,19 @@ test('host preserves the full pairing output and accepts verified result', async
   assert.equal(fs.existsSync(path.join(root, 'vendor/ns2jb/runs/mac2jb-active-connect.txt')), false);
   assert.equal(fs.statSync(path.join(root, 'vendor/ns2jb/runs')).mode & 0o777, 0o700);
 });
+test('USB command and failure output preserve the full pairing command', async t => {
+  const pairing = command();
+  const root = fixture(t, `
+    console.log('Sending: ' + ${JSON.stringify(pairing)});
+    console.error('Transfer stopped after ' + ${JSON.stringify(pairing)});
+    process.exitCode = 1;
+  `);
+  const result = await run(root, ['hid', 'commands', 'usb-drd0']).done;
+  assert.equal(result.code, 1);
+  assert.ok(result.events.some(e => e.type === 'command' && e.message === 'Sending: ' + pairing));
+  assert.ok(result.events.some(e => e.type === 'log' && e.message === 'Transfer stopped after ' + pairing));
+  assert.ok(result.events.some(e => e.type === 'failed' && e.partial === true));
+});
 test('host rejects a claimed success without restoration', async t => {
   const root = fixture(t, undefined, `
     const fs = require('fs'); const path = require('path'); process.umask(0o077);

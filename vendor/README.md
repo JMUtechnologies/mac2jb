@@ -13,7 +13,8 @@ source files. Root `LICENSE` does not override third-party terms.
   Xcode user settings are excluded. This is **not** a byte-for-byte upstream tree.
 - **ns2jb:** pinned upstream runtime/exploit source, with the original tests.
   The `README.md` checksum is corrected to match the pinned file. All runtime
-  and exploit files remain unchanged. Any redistributor must establish their
+  and exploit files remain unchanged.
+  Any redistributor must establish their
   own rights to ship it; a Git URL or public availability alone is not a license.
 
 Do not run `scripts/freeze-upstream.sh` in a normal user installation. It is a
