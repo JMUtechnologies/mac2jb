@@ -3,11 +3,6 @@ import Combine
 import Darwin
 import Foundation
 
-enum SessionPhase: String {
-    case preparing, ready, bootstrap, awaitingSave, hostStarting, commands
-    case waitingForConsole, verified, failed, cancelled
-}
-
 struct NetworkAddress: Identifiable, Hashable {
     let address: String
     let interface: String
@@ -191,10 +186,11 @@ private struct GUIEvent: Decodable {
         endSessionActivity()
         guard isBusy || phase == .awaitingSave else { return }
         // Remember the active step before replacing its phase with cancelled.
+        let recovery = SessionRecovery.message("Session stopped.", interruptedPhase: phase)
         workflowProgress.cancel()
+        detail = recovery
         phase = .cancelled; progress = nil; progressLabel = ""; isEnumerating = false
         status = "Session stopped"
-        detail = "Inspect the Switch for partial input. Restart it before another exploit attempt."
         error = nil
         append("Stop requested. Only this app’s worker processes are being stopped.")
         appendBootstrapDuration(outcome: "cancelled")
@@ -363,6 +359,7 @@ private struct GUIEvent: Decodable {
             fail(event.message ?? "The session did not finish. Inspect the Switch before retrying.")
         case "cancelled":
             endSessionActivity()
+            detail = SessionRecovery.message(event.message ?? "Session stopped.", interruptedPhase: phase)
             workflowProgress.cancel()
             phase = .cancelled; status = "Session stopped"; progress = nil; progressLabel = ""; isEnumerating = false
         default: break
@@ -389,11 +386,13 @@ private struct GUIEvent: Decodable {
     private func fail(_ message: String) {
         // Capture the failed stage atomically on the model's main actor. A
         // later cancellation/exit callback must not infer it from .failed.
+        let recovery = SessionRecovery.message(message, interruptedPhase: phase)
         workflowProgress.fail()
         endSessionActivity()
         ensureFallbackLog()
-        error = message; phase = .failed; status = "The session needs attention"
-        detail = message; progress = nil; progressLabel = ""; isEnumerating = false
+        error = recovery; detail = recovery
+        phase = .failed; status = "The session needs attention"
+        progress = nil; progressLabel = ""; isEnumerating = false
         append(message)
         appendBootstrapDuration(outcome: "failed")
         stopWorkers()

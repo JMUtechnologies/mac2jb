@@ -1,0 +1,39 @@
+import Foundation
+
+@main struct SessionRecoveryTests {
+    static func main() {
+        var passed = 0
+        func check(_ condition: Bool, _ name: String) {
+            guard condition else { fatalError("FAIL: " + name) }
+            passed += 1
+            print("PASS " + name)
+        }
+        let upstream = "The run stopped. Keep the runs folder and restart the console before trying again."
+        for phase in [SessionPhase.hostStarting, .commands, .waitingForConsole] {
+            check(SessionRecovery.message(upstream, interruptedPhase: phase) == upstream,
+                  "\(phase): upstream restart instruction is not repeated")
+            let cancelled = SessionRecovery.message("Session stopped.", interruptedPhase: phase)
+            check(cancelled.components(separatedBy: "Restart the console").count == 2 &&
+                  !cancelled.contains("partial bootstrap"), "\(phase): cancellation has one restart and no bootstrap advice")
+            let failed = SessionRecovery.message("The USB transfer stopped unexpectedly.", interruptedPhase: phase)
+            check(failed.contains("Restart the console") && !failed.contains("partial bootstrap"),
+                  "\(phase): failure recovery applies to post-bootstrap")
+        }
+        for message in ["The bootstrap transfer stopped.", "Session stopped."] {
+            let recovery = SessionRecovery.message(message, interruptedPhase: .bootstrap)
+            check(recovery.contains("Clear any partial bootstrap") && !recovery.contains("Restart the console"),
+                  "bootstrap failure/cancellation asks to clear partial bootstrap")
+            check(SessionRecovery.message(recovery, interruptedPhase: .bootstrap) == recovery,
+                  "bootstrap guidance is not repeated")
+        }
+        for phase in [SessionPhase.preparing, .ready, .awaitingSave] {
+            check(SessionRecovery.message("Session stopped.", interruptedPhase: phase) == "Session stopped.",
+                  "\(phase): no partial-bootstrap or post-bootstrap instruction")
+        }
+        check(SessionRecovery.message("Reboot your Switch 2 before retrying.", interruptedPhase: .commands) ==
+              "Reboot your Switch 2 before retrying.", "alternate console-restart wording is preserved")
+        check(SessionRecovery.message("restart the console before retrying.", interruptedPhase: .waitingForConsole) ==
+              "restart the console before retrying.", "restart detection ignores capitalization")
+        print("\(passed) session recovery checks passed; no hardware used.")
+    }
+}

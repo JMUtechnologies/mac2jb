@@ -208,7 +208,7 @@ struct ContentView: View {
     private var setup: some View {
         VStack(spacing: 18) {
             if model.phase == .failed || model.phase == .cancelled {
-                note(model.detail + " Restart the console before another post-bootstrap attempt. Clear any partial bootstrap before typing again.", icon: "exclamationmark.circle", color: .orange)
+                note(model.detail, icon: "exclamationmark.circle", color: .orange)
             }
             panel {
                 VStack(alignment: .leading, spacing: 16) {
