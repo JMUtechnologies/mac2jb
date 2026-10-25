@@ -205,10 +205,6 @@ This is the fallback for users who cannot use the bundled prebuilt driver. If yo
 
    A loaded kext does not guarantee HID enumeration. Confirm with the mac2jb USB test or by successfully typing into SmileBASIC.
 
-**Ventura troubleshooting — `KMErrorDomain Code=30: Invalid ownership (501:20) should be (0:0)`**
-
-This specific message is an **ownership/permissions validation failure**: macOS found a kext owned by a normal user (`501:20`) where it expected `root:wheel` (`0:0`). It does **not**, by itself, establish that macOS Ventura is incompatible with the driver. Running `sudo kmutil load -p usbgadget.kext` does not change ownership of that original bundle. Install a root-owned copy as shown above and retry with the absolute path. If the subsequent error is about signatures, policy, architecture, or compatibility, treat that as a separate issue; compatibility with Ventura is **not hardware-verified by this project**.
-
 See [Apple's custom kext installation guide](https://developer.apple.com/documentation/apple-silicon/installing-a-custom-kernel-extension) for approval/reboot details. Installing an experimental kernel driver can reduce system security or stability; avoid changing security settings merely to suppress an unexplained error.
 
 ## Build and check
@@ -316,7 +312,7 @@ The full game can save the bootstrap for later sessions. Historically, the demo 
 
 ### Unverified demo save/load workaround
 
-Reddit user **u/kuksthedefiled** shared the following commands (quoted from a Discord discussion) as a possible way to persist a program in the demo:
+A community-reported workaround uses the following commands as a possible way to persist a program in the demo:
 
 **Save program:**
 
@@ -354,12 +350,8 @@ Run folders can include console memory captures and machine-specific information
 
 ## Credits
 
-- **ns2jb** — original Switch 2 exploit and FS research: [upstream ns2jb](https://gitlab.com/pepsipu/ns2jb).
-- **libusbd** and **macos_usb_gadget_poc** — USB device emulation and experimental macOS gadget-driver work by [shinyquagsire23](https://github.com/shinyquagsire23).
+- **ns2jb** — original Switch 2 exploit and FS research by [pepsipu](https://gitlab.com/pepsipu): [upstream ns2jb](https://gitlab.com/pepsipu/ns2jb).
+- **libusbd** and **macos_usb_gadget_poc** — USB device emulation and experimental macOS gadget-driver work by [ShinyQuagsire](https://github.com/shinyquagsire23).
 - **SocraticBliss** — feedback and guidance that helped simplify USB driver installation, clarify the SIP requirement, and provide a prebuilt-driver setup path.
-- **[mathisdcco](https://github.com/mathisdcco)** — reported the AZERTY character substitutions in [issue #3](https://github.com/cpypwn/mac2jb/issues/3) and confirmed that changing the Switch 2 USB keyboard language fixed the issue on v0.3.1, without editing `sender.c`.
-- **u/Isacucho** — reported `#` being typed as `£`, helping highlight the console keyboard-layout requirement.
-- **u/kuksthedefiled** — shared the community-reported SmileBASIC demo save/load workaround, attributed to a Discord discussion; not yet verified here.
-- **ASCII art** — created using [Patorjk's Text to ASCII Art Generator](https://patorjk.com/software/taag/).
 
 See the project's included licenses and upstream documentation for copyright, attribution, and reuse terms.

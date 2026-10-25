@@ -6,7 +6,7 @@ Its personal signing certificate has been removed. Source-build instructions
 and the vendor source/license remain included.
 
 SocraticBliss contributed feedback and guidance on simplifying driver setup and
-documenting the SIP requirement. The USB driver is by Max Thomas / shinyquagsire23;
+documenting the SIP requirement. The USB driver is by Max Thomas / ShinyQuagsire;
 its upstream author credits and licenses are retained.
 
 The executable embeds the native mac2jb senders, libusbd, the pinned ns2jb
@@ -21,14 +21,14 @@ embedded under `source/`; the build also produces a separate source archive.
 The upstream origin and revisions remain recorded in `source/upstream.lock`.
 The root MIT license applies to mac2jb; it does not relicense third-party code.
 
-- libusbd: Max Thomas / shinyquagsire23; MIT notice preserved, together with
+- libusbd: Max Thomas / ShinyQuagsire; MIT notice preserved, together with
   Apple-derived APSL 2.0 source notices and full license text. Existing dated
   downstream modification notices are retained. This GUI build does not modify
   the libusbd sources or its existing build configuration.
 - macos_usb_gadget_poc: the documented, trimmed kernel-extension source and
   license texts remain included. The separately documented local prebuilt is
   under `drivers/`; the old upstream prebuilt is not used.
-- ns2jb: the pinned upstream snapshot and existing README/provenance remain
+- ns2jb: upstream work by pepsipu; the pinned snapshot and existing README/provenance remain
   preserved. No new license is asserted for this snapshot. The existing
   redistribution/third-party-rights review requirement still applies before a
   public release. GUI orchestration is separate from the vendor source.

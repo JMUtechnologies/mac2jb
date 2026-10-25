@@ -13,7 +13,7 @@ Copyright © 2022 Max Thomas. Upstream MIT license: `../vendor/macos_usb_gadget_
 
 SIP must be disabled for this unsigned-driver workflow. Enable third-party kernel extensions in Recovery and complete any macOS approval/reboot prompts. Neither the GUI nor the installer changes startup security or SIP.
 
-Thanks to **SocraticBliss** for the feedback and guidance behind the simplified prebuilt-driver installation path and clearer SIP instructions. The driver itself is upstream work by **Max Thomas / shinyquagsire23**, with the local build and unsigned-copy testing performed by the mac2jb maintainer.
+Thanks to **SocraticBliss** for the feedback and guidance behind the simplified prebuilt-driver installation path and clearer SIP instructions. The driver itself is upstream work by **Max Thomas / ShinyQuagsire**, with the local build and unsigned-copy testing performed by the mac2jb maintainer.
 
 From the complete source checkout: `bash scripts/install-driver.sh`. To validate the bundled files without installing or loading: `bash scripts/install-driver.sh --verify`.
 

@@ -1,4 +1,4 @@
-// USB HID text sender based on the libusbd keyboard example by shinyquagsire23.
+// USB HID text sender based on the libusbd keyboard example by ShinyQuagsire.
 // This program TYPES a file; it does not execute its contents.
 #include <stdio.h>
 #include <stdlib.h>
