@@ -350,8 +350,8 @@ Run folders can include console memory captures and machine-specific information
 
 ## Credits
 
-- **ns2jb** — original Switch 2 exploit and FS research by [pepsipu](https://gitlab.com/pepsipu): [upstream ns2jb](https://gitlab.com/pepsipu/ns2jb).
-- **libusbd** and **macos_usb_gadget_poc** — USB device emulation and experimental macOS gadget-driver work by [ShinyQuagsire](https://github.com/shinyquagsire23).
-- **SocraticBliss** — feedback and guidance that helped simplify USB driver installation, clarify the SIP requirement, and provide a prebuilt-driver setup path.
+- **[pepsipu](https://gitlab.com/pepsipu)** — [ns2jb](https://gitlab.com/pepsipu/ns2jb), the original Switch 2 exploit and FS research.
+- **[ShinyQuagsire](https://github.com/shinyquagsire23)** — [libusbd](https://github.com/shinyquagsire23/libusbd) and [macos_usb_gadget_poc](https://github.com/shinyquagsire23/macos_usb_gadget_poc), USB device emulation and experimental macOS gadget-driver work.
+- **[SocraticBliss](https://github.com/SocraticBliss)** — feedback and guidance that helped simplify USB driver installation, clarify the SIP requirement, and provide a prebuilt-driver setup path.
 
 See the project's included licenses and upstream documentation for copyright, attribution, and reuse terms.
