@@ -83,6 +83,12 @@ jobs:
       - name: Verify experimental media protocol and Stremio addon client
         run: node --test stremio/*.test.cjs stremio/test-*.cjs
 
+      - name: Verify OunceCake snapshot and lifecycle without a console
+        run: |
+          node scripts/gui-ouncecake.cjs --self-test
+          node --test scripts/test-gui-ouncecake.cjs
+          bash scripts/test-ouncecake-session.sh
+
       - name: Check shell script syntax
         run: |
           bash -n make-release-zip.command

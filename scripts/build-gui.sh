@@ -33,6 +33,7 @@ fi
 
 "$NODE_BINARY" scripts/prepare-bootstrap.cjs --check
 "$NODE_BINARY" scripts/prepare-homebrew-apps.cjs --check
+"$NODE_BINARY" scripts/gui-ouncecake.cjs --self-test
 shasum -a 256 -c assets/bootstrap.bas.sha256
 bash scripts/install-driver.sh --verify
 (cd vendor/ns2jb && shasum -a 256 -c SHA256SUMS >/dev/null)
@@ -128,11 +129,13 @@ for name in files:
 for name in folders:
     if (root/name).exists():
         for src in sorted((root/name).rglob('*')): copy(src, source/src.relative_to(root))
-for name in ['vendor/ns2jb', 'vendor/HBLauncher', 'assets', 'drivers', 'stremio']:
+for name in ['vendor/ns2jb', 'vendor/HBLauncher', 'vendor/OunceCake', 'assets', 'drivers', 'stremio']:
     for src in sorted((root/name).rglob('*')): copy(src, payload/src.relative_to(root))
 for name in ['scripts/gui-host.cjs', 'scripts/gui-session.cjs', 'scripts/gui-dump.cjs',
              'scripts/gui-homebrew.cjs', 'scripts/gui-stremio.cjs', 'scripts/check-homebrew-runtime.cjs',
              'scripts/prepare-homebrew-apps.cjs', 'scripts/check-stremio-runtime.cjs',
+             'scripts/gui-ouncecake.cjs', 'packaging/OunceCake-provenance.json',
+             'packaging/OunceCake-SHA256SUMS', 'packaging/OunceCake-upstream-SHA256SUMS',
              'packaging/stremio-display-SHA256SUMS', 'packaging/stremio-sample-provenance.json',
              'scripts/install-driver.sh', 'packaging/NOTICE.md']:
     if not (root/name).is_file(): raise SystemExit('Missing GUI build input: '+name)

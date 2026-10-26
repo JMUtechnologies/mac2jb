@@ -6,9 +6,17 @@ struct UpdateInstallPlan: Codable {
     let directory: URL
     let destination: URL
     let version: String
+    let build: Int?
+    let minimumBuild: Int?
     let originalSHA256: String
     let updateSHA256: String
     let parentPID: Int32
+    init(directory: URL, destination: URL, version: String, build: Int? = nil, minimumBuild: Int? = nil,
+         originalSHA256: String, updateSHA256: String, parentPID: Int32) {
+        self.directory = directory; self.destination = destination; self.version = version
+        self.build = build; self.minimumBuild = minimumBuild
+        self.originalSHA256 = originalSHA256; self.updateSHA256 = updateSHA256; self.parentPID = parentPID
+    }
     var candidate: URL { directory.appendingPathComponent("unpacked/mac2jb.app", isDirectory: true) }
     var logURL: URL { directory.appendingPathComponent("update.log") }
     var backup: URL { destination.deletingLastPathComponent().appendingPathComponent("mac2jb-backup-" + directory.lastPathComponent + ".app") }
@@ -40,10 +48,17 @@ enum UpdateInstaller {
             from: Data(contentsOf: destination.appendingPathComponent("Contents/Info.plist")), format: nil) as? [String: Any]
         guard originalInfo?["CFBundleIdentifier"] as? String == UpdatePackage.bundleID,
               let originalVersion = originalInfo?["CFBundleShortVersionString"] as? String,
-              try UpdateVersion(plan.version) > UpdateVersion(originalVersion) else {
-            throw UpdateFailure("The update must be newer than the installed mac2jb version.")
+              let originalBuild = originalInfo?["CFBundleVersion"] as? String else {
+            throw UpdateFailure("The installed mac2jb version or build is invalid.")
         }
-        try UpdatePackage.validateApp(plan.candidate, version: plan.version)
+        let candidateBuild = try UpdatePackage.validateApp(plan.candidate, version: plan.version,
+                                                         build: plan.build, minimumBuild: plan.minimumBuild)
+        let candidateVersion = try UpdateVersion(plan.version), installedVersion = try UpdateVersion(originalVersion)
+        let installedBuild = try UpdateBuild.parse(originalBuild)
+        guard candidateVersion > installedVersion || candidateVersion == installedVersion &&
+                candidateBuild > installedBuild else {
+            throw UpdateFailure("The update must have a newer version or a higher build of the same version.")
+        }
         guard try UpdatePackage.sha256(plan.candidate.appendingPathComponent("Contents/MacOS/mac2jb")) == plan.updateSHA256 else {
             throw UpdateFailure("The staged update changed. Download it again.")
         }
@@ -53,7 +68,8 @@ enum UpdateInstaller {
         }
         try manager.copyItem(at: plan.candidate, to: incoming)
         do {
-            try UpdatePackage.validateApp(incoming, version: plan.version)
+            try UpdatePackage.validateApp(incoming, version: plan.version, build: candidateBuild,
+                                          minimumBuild: plan.minimumBuild)
         } catch {
             try? manager.removeItem(at: incoming)
             throw error
@@ -63,7 +79,8 @@ enum UpdateInstaller {
             do {
                 try afterBackup?()
                 try manager.moveItem(at: incoming, to: destination)
-                try UpdatePackage.validateApp(destination, version: plan.version)
+                try UpdatePackage.validateApp(destination, version: plan.version, build: candidateBuild,
+                                              minimumBuild: plan.minimumBuild)
             } catch {
                 // Preserve a failed candidate in staging, then restore the old
                 // bundle. A failed rollback never deletes the saved backup.

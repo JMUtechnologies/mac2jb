@@ -91,6 +91,8 @@ struct BundledRuntime {
             for path in ["node", "mac2jb-send", "mac2jb-commands", "vendor/libusbd/libusbd.dylib",
                          "scripts/gui-host.cjs", "scripts/gui-session.cjs", "scripts/gui-dump.cjs",
                          "scripts/gui-homebrew.cjs", "scripts/gui-stremio.cjs", "stremio/pipeline.cjs", "stremio/app/app.json", "scripts/check-homebrew-runtime.cjs",
+                         "scripts/gui-ouncecake.cjs", "vendor/OunceCake/LICENSE", "vendor/OunceCake/engine/oz-code/native.bin",
+                         "packaging/OunceCake-provenance.json", "packaging/OunceCake-SHA256SUMS",
                          "homebrew/manifest.json", "homebrew/fonts/DejaVuSans.ttf",
                          "vendor/HBLauncher/homebrew-launcher/launcher.cjs",
                          "scripts/install-driver.sh", "drivers/SHA256SUMS",

@@ -22,19 +22,64 @@ struct UpdateVersion: Comparable, Equatable {
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.components.lexicographicallyPrecedes(rhs.components) }
 }
 
-struct UpdateAsset: Decodable {
+struct UpdateAsset: Codable {
     let name: String
     let size: Int64
     let browser_download_url: URL
     let digest: String?
 }
 
-struct UpdateRelease: Decodable {
+enum UpdateBuild {
+    static let maximum = 2_147_483_647
+    static func parse(_ text: String) throws -> Int {
+        guard text.range(of: #"^[1-9][0-9]{0,9}$"#, options: .regularExpression) != nil,
+              let value = Int(text), value <= maximum else {
+            throw UpdateFailure("The app has an unsupported build number.")
+        }
+        return value
+    }
+}
+
+struct UpdateBuildPolicy: Equatable {
+    let build: Int
+    let minimumBuild: Int
+
+    static func parse(_ body: String?) throws -> Self? {
+        guard let body, body.contains("mac2jb-update") else { return nil }
+        guard body.utf8.count <= 128 * 1024,
+              body.components(separatedBy: "mac2jb-update").count == 2 else {
+            throw UpdateFailure("The release update policy is invalid.")
+        }
+        let pattern = #"<!-- mac2jb-update:\s*(\{[^\r\n]*\})\s*-->"#
+        let expression = try NSRegularExpression(pattern: pattern)
+        let range = NSRange(body.startIndex..., in: body)
+        let matches = expression.matches(in: body, range: range)
+        guard matches.count == 1, let jsonRange = Range(matches[0].range(at: 1), in: body),
+              body[jsonRange].utf8.count <= 256,
+              let data = String(body[jsonRange]).data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == Set(["build", "minimumBuild"]) else {
+            throw UpdateFailure("The release update policy is invalid.")
+        }
+        // Match the JSON text as well: booleans, strings, fractions, duplicate
+        // fields and exponent notation must not become integer policy values.
+        let fields = #"\{\s*"(?:build|minimumBuild)"\s*:\s*(?:0|[1-9][0-9]*)\s*,\s*"(?:build|minimumBuild)"\s*:\s*(?:0|[1-9][0-9]*)\s*\}"#
+        guard String(body[jsonRange]).range(of: "^" + fields + "$", options: .regularExpression) != nil,
+              let build = object["build"] as? Int, let minimum = object["minimumBuild"] as? Int,
+              build > 0, build <= UpdateBuild.maximum, minimum >= 0, minimum <= build else {
+            throw UpdateFailure("The release update policy is invalid.")
+        }
+        return Self(build: build, minimumBuild: minimum)
+    }
+}
+
+struct UpdateRelease: Codable {
     let tag_name: String
     let draft: Bool
     let prerelease: Bool
     let html_url: URL
     let assets: [UpdateAsset]
+    let body: String?
 
     func validated() throws -> UpdateCandidate {
         guard !draft, !prerelease, tag_name.hasPrefix("v") else { throw UpdateFailure("Only stable releases are supported.") }
@@ -61,7 +106,9 @@ struct UpdateRelease: Decodable {
         guard html_url.absoluteString == "https://github.com/cpypwn/mac2jb/releases/tag/\(tag_name)" else {
             throw UpdateFailure("The release address is invalid.")
         }
-        return UpdateCandidate(version: version, archive: archive, checksums: checksums, releaseURL: html_url)
+        let policy = try UpdateBuildPolicy.parse(body)
+        return UpdateCandidate(version: version, archive: archive, checksums: checksums, releaseURL: html_url,
+                               build: policy?.build, minimumBuild: policy?.minimumBuild)
     }
 
     static func digest(_ value: String?) throws -> String {
@@ -77,6 +124,50 @@ struct UpdateCandidate {
     let archive: UpdateAsset
     let checksums: UpdateAsset
     let releaseURL: URL
+    let build: Int?
+    let minimumBuild: Int?
+
+    func isNewer(than installed: UpdateVersion, build installedBuild: Int) -> Bool {
+        version > installed || version == installed && (build.map { $0 > installedBuild } ?? false)
+    }
+
+    var displayVersion: String { version.text + (build.map { " (build \($0))" } ?? "") }
+}
+
+// Store the complete validated repository release, so a cached requirement
+// cannot be restored without rechecking its origin, assets, digests and policy.
+struct UpdateRequirement {
+    let release: UpdateRelease
+    let candidate: UpdateCandidate
+    let minimumBuild: Int
+
+    init(_ release: UpdateRelease) throws {
+        let update = try release.validated()
+        guard let minimum = update.minimumBuild, minimum > 0 else {
+            throw UpdateFailure("The release does not declare a required update.")
+        }
+        self.release = release
+        self.candidate = update
+        self.minimumBuild = minimum
+    }
+
+    func incorporating(_ next: UpdateRelease) throws -> Self {
+        let update = try next.validated()
+        guard let minimum = update.minimumBuild, minimum > 0 else { return self }
+        if minimum > minimumBuild || minimum == minimumBuild &&
+            update.isNewer(than: candidate.version, build: candidate.build ?? 0) {
+            return try Self(next)
+        }
+        return self
+    }
+
+    func blocks(installedBuild: Int) -> Bool { installedBuild < minimumBuild }
+
+    func encoded() throws -> Data { try JSONEncoder().encode(release) }
+    static func restored(_ data: Data) throws -> Self {
+        guard data.count <= 1024 * 1024 else { throw UpdateFailure("The saved update policy is too large.") }
+        return try Self(JSONDecoder().decode(UpdateRelease.self, from: data))
+    }
 }
 
 enum UpdatePackage {
@@ -178,7 +269,8 @@ enum UpdatePackage {
         return String(decoding: bytes, as: UTF8.self)
     }
 
-    static func validateApp(_ app: URL, version: String) throws {
+    @discardableResult static func validateApp(_ app: URL, version: String, build: Int? = nil,
+                                              minimumBuild: Int? = nil) throws -> Int {
         let manager = FileManager.default
         let metadata = try app.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard metadata.isDirectory == true, metadata.isSymbolicLink != true else { throw UpdateFailure("The update is not an app bundle.") }
@@ -200,6 +292,13 @@ enum UpdatePackage {
               minimum.compare(ProcessInfo.processInfo.operatingSystemVersionStringValue, options: .numeric) != .orderedDescending else {
             throw UpdateFailure("The downloaded app does not match this release or requires a newer macOS.")
         }
+        guard let buildText = plist?["CFBundleVersion"] as? String else {
+            throw UpdateFailure("The downloaded app has no build number.")
+        }
+        let actualBuild = try UpdateBuild.parse(buildText)
+        guard build == nil || actualBuild == build, minimumBuild == nil || actualBuild >= minimumBuild! else {
+            throw UpdateFailure("The downloaded app does not match the advertised or required build.")
+        }
         let binary = app.appendingPathComponent("Contents/MacOS/mac2jb")
         guard manager.isExecutableFile(atPath: binary.path) else { throw UpdateFailure("The update executable is missing.") }
         let executable = try FileHandle(forReadingFrom: binary)
@@ -208,6 +307,7 @@ enum UpdatePackage {
             throw UpdateFailure("The update executable is not a supported Apple Silicon build.")
         }
         _ = try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
+        return actualBuild
     }
 }
 

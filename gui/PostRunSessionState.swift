@@ -3,8 +3,8 @@ import Foundation
 // Verification with a live endpoint is a checkpoint. Completion still requires
 // the host to restore its retained resources and verify final cleanup.
 struct PostRunSessionState: Equatable {
-    enum Stage { case inactive, awaitingChoice, held, dumping, finishing, complete, stopped }
-    enum HomebrewStage { case idle, launching, running, stopped, failed }
+    enum Stage { case inactive, awaitingChoice, held, dumping, finishing, complete, stopped, blocked }
+    enum HomebrewStage { case idle, launching, selecting, running, stopped, failed }
     private(set) var stage: Stage = .inactive
     private(set) var homebrewStage: HomebrewStage = .idle
     private(set) var heldConfirmed = false
@@ -12,6 +12,7 @@ struct PostRunSessionState: Equatable {
     private(set) var dumpRequested = false
     private(set) var dumpCompleted = false
     private(set) var statusInFlight = false
+    private(set) var cleanupBlocked = false
 
     var isActive: Bool { [.awaitingChoice, .held, .dumping, .finishing].contains(stage) }
     var canFinish: Bool { stage == .awaitingChoice || stage == .held && !statusInFlight && homebrewStage != .launching }
@@ -50,6 +51,14 @@ struct PostRunSessionState: Equatable {
         return true
     }
 
+    var canSelectHomebrew: Bool { stage == .held && heldConfirmed && homebrewStage == .selecting && !cleanupBlocked }
+
+    @discardableResult mutating func selectHomebrew() -> Bool {
+        guard canSelectHomebrew else { return false }
+        homebrewStage = .launching
+        return true
+    }
+
     @discardableResult mutating func receive(_ event: String) -> Bool {
         switch event {
         case "rpc-held":
@@ -71,6 +80,9 @@ struct PostRunSessionState: Equatable {
             statusInFlight = false
         case "homebrew-started":
             guard stage == .held, heldConfirmed, homebrewStage == .launching else { return false }
+        case "homebrew-catalog":
+            guard stage == .held, heldConfirmed, homebrewStage == .launching else { return false }
+            homebrewStage = .selecting
         case "homebrew-running":
             guard stage == .held, homebrewStage == .launching else { return false }
             homebrewStage = .running
@@ -80,8 +92,12 @@ struct PostRunSessionState: Equatable {
             homebrewStage = event == "homebrew-stopped" ? .stopped : .failed
             if event == "homebrew-failed" { heldConfirmed = false }
         case "verified":
-            guard isActive else { return false }
+            guard isActive, !cleanupBlocked else { return false }
             heldConfirmed = false; statusInFlight = false; stage = .complete
+        case "cleanup-blocked":
+            guard homebrewAttempted else { return false }
+            cleanupBlocked = true; heldConfirmed = false; statusInFlight = false
+            homebrewStage = .failed; stage = .blocked
         default: return false
         }
         return true

@@ -21,6 +21,17 @@ required = {
     'mac2jb/vendor/HBLauncher/homebrew-launcher/launcher.cjs',
     'mac2jb/scripts/gui-homebrew.cjs',
     'mac2jb/scripts/gui-stremio.cjs',
+    'mac2jb/scripts/gui-ouncecake.cjs',
+    'mac2jb/vendor/OunceCake/LICENSE',
+    'mac2jb/vendor/OunceCake/README.md',
+    'mac2jb/vendor/OunceCake/engine/oz-code/native.c',
+    'mac2jb/vendor/OunceCake/engine/oz-code/native.h',
+    'mac2jb/vendor/OunceCake/engine/oz-code/layout.ld',
+    'mac2jb/vendor/OunceCake/engine/oz-code/native.bin',
+    'mac2jb/vendor/OunceCake/engine/build-ftp.cjs',
+    'mac2jb/packaging/OunceCake-provenance.json',
+    'mac2jb/packaging/OunceCake-SHA256SUMS',
+    'mac2jb/packaging/OunceCake-upstream-SHA256SUMS',
     'mac2jb/stremio/pipeline.cjs',
     'mac2jb/stremio/app/app.frag.spv',
     'mac2jb/assets/stremio/bbb-sample.mp4',
@@ -77,6 +88,34 @@ with zipfile.ZipFile(archive) as z:
     for name in names:
         if name.startswith(prefix) and not name.endswith('/') and name[len(prefix):] not in driver_files:
             violations.append('unexpected driver file or signing metadata: ' + name)
+    ounce_manifest = 'mac2jb/packaging/OunceCake-SHA256SUMS'
+    ounce_prefix = 'mac2jb/vendor/OunceCake/'
+    if ounce_manifest in names:
+        try:
+            expected = {}
+            for line in z.read(ounce_manifest).decode().splitlines():
+                digest, relative = line.split('  ', 1)
+                if (len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)
+                        or relative.startswith('/') or '..' in PurePosixPath(relative).parts
+                        or '\\' in relative or ounce_prefix + relative in expected):
+                    raise ValueError('invalid OunceCake manifest')
+                expected[ounce_prefix + relative] = digest
+            actual = {name for name in names if name.startswith(ounce_prefix) and not name.endswith('/')}
+            if len(expected) != 17 or actual != set(expected):
+                violations.append('incomplete or unexpected OunceCake source distribution')
+            for name, digest in expected.items():
+                if name not in names or hashlib.sha256(z.read(name)).hexdigest() != digest:
+                    violations.append('missing or changed OunceCake source: ' + name)
+            native = ounce_prefix + 'engine/oz-code/native.bin'
+            if hashlib.sha256(z.read(native)).hexdigest() != '9af1776daae66e5566b9fb52e9017b6b78203e4c93d3b63d7000f0196eb5ff1e':
+                violations.append('changed pinned OunceCake native image')
+            provenance = json.loads(z.read('mac2jb/packaging/OunceCake-provenance.json'))
+            if provenance.get('commit') != 'e3bcbd229be2229d44f036455adddda921ade3b2' or provenance.get('license') != 'GPLv2':
+                violations.append('changed OunceCake upstream provenance')
+            if b'GNU GENERAL PUBLIC LICENSE' not in z.read(ounce_prefix + 'LICENSE'):
+                violations.append('missing OunceCake GPL license text')
+        except (KeyError, ValueError, UnicodeError):
+            violations.append('missing or malformed OunceCake source/provenance')
     # The app overlay must be the exact published package, independently of
     # the frozen HBLauncher tree and its unchanged integrity manifest.
     ftpd_manifest = 'mac2jb/packaging/ftpd-sb-v0.1.0-SHA256SUMS'

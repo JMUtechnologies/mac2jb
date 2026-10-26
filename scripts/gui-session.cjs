@@ -95,6 +95,7 @@ async function main({root, address, emit, lines, verifiedResult, input = process
   let finishTimer, helperTimer, dumpTask, statusBusy = false;
   let rpcHeldConfirmed = false, homebrewAttempted = false, homebrewChild, homebrewTask;
   let homebrewRunning = false, homebrewSettled = false, homebrewStopTimer, homebrewFailurePublished = false;
+  let homebrewApplication, awaitingGame = false, gameTitles = new Set(), cleanupBlocked = false;
   const safeEmit = (type, fields = {}) => {
     if (outputClosed) return;
     try {emit(type, fields);} catch (error) {
@@ -109,11 +110,13 @@ async function main({root, address, emit, lines, verifiedResult, input = process
   }
   function stopHomebrew() {
     if (!homebrewChild) return;
+    if (cleanupBlocked) {signalGroup(homebrewChild, 'SIGKILL'); return;}
     if (!homebrewSettled) {
       try {homebrewChild.kill('SIGTERM');} catch (error) {if (error.code !== 'ESRCH') fail(error.message);}
     }
     homebrewStopTimer ||= setTimeout(() => {
       fail('The homebrew app did not confirm shutdown. Finish RPC and restart the console.');
+      if (homebrewApplication === 'ouncecake') cleanupBlocked = true;
       signalGroup(homebrewChild, 'SIGKILL');
     }, 300000);
     homebrewStopTimer.unref();
@@ -132,6 +135,12 @@ async function main({root, address, emit, lines, verifiedResult, input = process
       safeEmit('rpc-finishing', {message: reason + ' Releasing held resources and closing RPC.'});
       const releaseRunner = () => {
         if (closed) return;
+        if (cleanupBlocked) {
+          // An uncertain native worker must keep its code and handles. End the
+          // local bridge without executing the fork's native cleanup underneath it.
+          fail('OunceCake shutdown was not confirmed. Restart the console; native resources were retained.');
+          signalGroup(runner, 'SIGKILL'); return;
+        }
         // HBLauncher owners stop while RPC is live, before fork IPC cleanup.
         try {runner.kill('SIGTERM');} catch (error) {if (error.code !== 'ESRCH') fail(error.message);}
         finishTimer = setTimeout(() => {
@@ -234,12 +243,15 @@ async function main({root, address, emit, lines, verifiedResult, input = process
       else finish('Firmware dump completed.');
     }
     async function homebrew(application = "hblauncher", config = {}) {
-      homebrewChild = spawn(process.execPath, [path.join(root, application === 'stremio' ? 'scripts/gui-stremio.cjs' : 'scripts/gui-homebrew.cjs'), directory], {
-        cwd: root, detached: true, stdio: [application === 'stremio' ? 'pipe' : 'ignore', 'pipe', 'pipe'], env: {...process.env}
+      homebrewApplication = application;
+      const script = {stremio:'scripts/gui-stremio.cjs', ouncecake:'scripts/gui-ouncecake.cjs', hblauncher:'scripts/gui-homebrew.cjs'}[application];
+      homebrewChild = spawn(process.execPath, [path.join(root, script), directory], {
+        cwd: root, detached: true, stdio: [application !== 'hblauncher' ? 'pipe' : 'ignore', 'pipe', 'pipe'], env: {...process.env}
       });
-      if (application === 'stremio') {
-        homebrewChild.stdin.on('error', error => {if (error.code !== 'EPIPE') fail('Could not configure the experimental player.');});
-        homebrewChild.stdin.end(JSON.stringify(config) + '\n');
+      if (application !== 'hblauncher') {
+        homebrewChild.stdin.on('error', error => {if (error.code !== 'EPIPE') fail('Could not configure the selected app.');});
+        homebrewChild.stdin.write(JSON.stringify(config) + '\n');
+        if (application === 'stremio') homebrewChild.stdin.end();
       }
       const child = homebrewChild, done = finished(child);
       const observe = line => {
@@ -252,20 +264,44 @@ async function main({root, address, emit, lines, verifiedResult, input = process
             safeEmit('account-progress', {watchProgress: event.watchProgress});
           return;
         }
+        if (event.type === 'catalog') {
+          if (application !== 'ouncecake' || gameTitles.size !== 0 || awaitingGame || homebrewRunning || homebrewSettled ||
+              !Array.isArray(event.games) || event.games.length > 1000 || event.games.length === 0 ||
+              event.games.some(game => !game || !/^[a-f0-9]{16}$/.test(game.titleId) ||
+                typeof game.name !== 'string' || Buffer.byteLength(game.name) > 160 ||
+                /[\x00-\x1f\x7f]/.test(game.name) || !Array.isArray(game.storages) ||
+                game.storages.length < 1 || game.storages.length > 3 || new Set(game.storages).size !== game.storages.length ||
+                game.storages.some(value => ![2,4,5].includes(value))) ||
+              new Set(event.games.map(game => game.titleId)).size !== event.games.length) {
+            fail('OunceCake returned an invalid game list.'); stopHomebrew(); return;
+          }
+          gameTitles = new Set(event.games.map(game => game.titleId)); awaitingGame = true;
+          safeEmit('homebrew-catalog', {games:event.games,path:directory,message:event.message}); return;
+        }
         if (!['started','progress','running','stopped','failed'].includes(event.type)) return;
+        if (application === 'ouncecake' && event.type === 'running' &&
+            (awaitingGame || gameTitles.size === 0 || event.host !== config.consoleAddress || event.port !== 2121 ||
+             event.ftpURL !== `ftp://${config.consoleAddress}:2121`)) {
+          fail('OunceCake did not confirm the selected FTP endpoint.'); stopHomebrew(); return;
+        }
+        if (application === 'ouncecake' && event.cleanupBlocked === true) {
+          cleanupBlocked = true; fail('OunceCake could not confirm native shutdown. Restart the console before stopping this session.');
+        }
         if (event.type === 'running') homebrewRunning = true;
         if (event.type === 'stopped' || event.type === 'failed') {homebrewRunning = false; homebrewSettled = true;}
         if (event.type === 'failed') {fail(event.message || 'HBLauncher failed. Restart the console.'); homebrewFailurePublished = true;}
-        safeEmit('homebrew-' + event.type, {path: event.path || directory, message: event.message});
+        safeEmit('homebrew-' + event.type, {path: event.path || directory, message: event.message,
+          ...(application === 'ouncecake' ? {host:event.host,port:event.port,ftpURL:event.ftpURL,cleanupBlocked} : {})});
       };
-      lines(child.stdout, observe); lines(child.stderr, observe);
+      lines(child.stdout, observe, 1024 * 1024); lines(child.stderr, observe);
       const outcome = await done;
       clearTimeout(homebrewStopTimer); homebrewStopTimer = undefined;
       homebrewChild = undefined; homebrewRunning = false;
-      if (outcome.error || outcome.code !== 0 || outcome.signal) {
-        fail('HBLauncher failed or did not confirm shutdown. Finish RPC and restart the console.');
+      if (outcome.error || outcome.code !== 0 || outcome.signal || application === 'ouncecake' && !homebrewSettled) {
+        if (application === 'ouncecake' && !homebrewSettled) cleanupBlocked = true;
+        fail('The selected app failed or did not confirm shutdown. Restart the console.');
         if (!homebrewFailurePublished) safeEmit('homebrew-failed', {path: directory,
-          message: failure + ' This launch was not retried.'});
+          message: failure + ' This launch was not retried.',cleanupBlocked});
       }
     }
     async function control(line) {
@@ -276,12 +312,24 @@ async function main({root, address, emit, lines, verifiedResult, input = process
       }
       if (!ready || closed || finishing) {safeEmit('action-rejected', {message: 'The session is not ready for this action.'}); return;}
       if (command.action === 'finish') {
-        if (helper || statusBusy || homebrewChild && !homebrewRunning && !homebrewSettled) {
+        if (cleanupBlocked) {safeEmit('action-rejected', {message:'Restart the console, then stop this session. Native shutdown was not confirmed.'}); return;}
+        if (helper || statusBusy || homebrewChild && !homebrewRunning && !homebrewSettled && !awaitingGame) {
           safeEmit('action-rejected', {message: 'Wait for the current operation to finish.'}); return;
         }
         choiceMade = true; finish(); return;
       }
-      if (command.action === 'launch-hblauncher' || command.action === 'launch-stremio') {
+      if (command.action === 'select-ouncecake-game') {
+        if (homebrewApplication !== 'ouncecake' || !awaitingGame || !homebrewChild || homebrewSettled || cleanupBlocked ||
+            typeof command.titleId !== 'string' || !gameTitles.has(command.titleId)) {
+          safeEmit('action-rejected', {message:'Choose one game from this session’s OunceCake list.'}); return;
+        }
+        awaitingGame = false;
+        homebrewChild.stdin.write(JSON.stringify({action:'select-game',titleId:command.titleId}) + '\n'); return;
+      }
+      if (command.action === 'launch-hblauncher' || command.action === 'launch-stremio' || command.action === 'launch-ouncecake') {
+        if (command.action === 'launch-ouncecake' && !net.isIPv4(command.consoleAddress)) {
+          safeEmit('action-rejected', {message:'Enter the Switch’s IPv4 address for OunceCake FTP.'}); return;
+        }
         if (command.action === 'launch-stremio' && (command.addonUrls !== undefined &&
             (!Array.isArray(command.addonUrls) || command.addonUrls.length > 32 ||
              command.addonUrls.some(url => typeof url !== 'string' || url.length > 4096)) ||
@@ -293,10 +341,12 @@ async function main({root, address, emit, lines, verifiedResult, input = process
           safeEmit('action-rejected', {message: 'Homebrew requires this session’s held RPC and can be launched only once.'}); return;
         }
         homebrewAttempted = true;
-        homebrewTask = homebrew(command.action === 'launch-stremio' ? 'stremio' : 'hblauncher',
+        const application = command.action === 'launch-ouncecake' ? 'ouncecake' : command.action === 'launch-stremio' ? 'stremio' : 'hblauncher';
+        homebrewTask = homebrew(application, application === 'ouncecake' ? {consoleAddress:command.consoleAddress,port:2121} :
           {addonUrls: command.addonUrls || [], libraryItems: command.libraryItems || []}).catch(error => {
+          if (application === 'ouncecake') cleanupBlocked = true;
           fail(error.message); safeEmit('homebrew-failed', {path: directory,
-            message: error.message + ' Finish RPC and restart the console. This launch was not retried.'});
+            message: error.message + ' Finish RPC and restart the console. This launch was not retried.',cleanupBlocked});
         });
         return;
       }
@@ -327,6 +377,9 @@ async function main({root, address, emit, lines, verifiedResult, input = process
     closed = true; clearTimeout(finishTimer);
     if (homebrewChild) {
       fail('The original RPC session ended while HBLauncher was active. Restart the console.');
+      // When the original connection disappears, no further native cleanup is
+      // trustworthy. Only end the local helper; the console must be restarted.
+      if (homebrewApplication === 'ouncecake') cleanupBlocked = true;
       stopHomebrew(); await homebrewTask;
     }
     if (helper) {

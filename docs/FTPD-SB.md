@@ -1,6 +1,6 @@
 # ftpd-sb v0.1.0
 
-mac2jb v0.4.2 includes the exact published ftpd-sb v0.1.0 package.
+mac2jb v0.4.3 includes the exact published ftpd-sb v0.1.0 package.
 It runs inside the bundled HBLauncher v0.2.0; no Pico or app compilation is
 needed for this mac2jb workflow.
 

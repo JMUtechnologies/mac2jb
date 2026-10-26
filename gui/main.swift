@@ -32,6 +32,7 @@ if CommandLine.arguments.contains("--self-test") {
             ("node", ["scripts/check-homebrew-runtime.cjs"]),
             ("node", ["--check", "scripts/gui-stremio.cjs"]),
             ("node", ["scripts/check-stremio-runtime.cjs"]),
+            ("node", ["scripts/gui-ouncecake.cjs", "--self-test"]),
             ("node", ["scripts/gui-host.cjs", "--self-test"])
         ]
         for (tool, arguments) in checks {

@@ -32,57 +32,119 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
     @Published private(set) var progress: Double = 0
     @Published private(set) var candidate: UpdateCandidate?
     @Published private(set) var diagnosticURL: URL?
-    @Published var checksAutomatically: Bool = !AppBuildIdentity.isTestBuild &&
-        (UserDefaults.standard.object(forKey: "checkUpdatesAutomatically") as? Bool ?? true) {
-        didSet { UserDefaults.standard.set(checksAutomatically, forKey: "checkUpdatesAutomatically") }
+    @Published private(set) var requiredUpdate = false
+    @Published var checksAutomatically: Bool {
+        didSet { defaults.set(checksAutomatically, forKey: "checkUpdatesAutomatically") }
     }
+    static let requirementCacheKey = "validatedRequiredUpdateRelease-v1"
+    private let defaults: UserDefaults
+    private let installedVersion: String?
+    private let installedBuild: Int?
+    private let installedApp: URL?
+    private let stagingParent: URL?
+    private let updatesEnabled: Bool
+    private let transport: (@Sendable (URL, Int64, Int64?) async throws -> URL)?
+    private var requirement: UpdateRequirement?
     private var plan: UpdateInstallPlan?
     private var task: Task<Void, Never>?
     private var periodicCheck: Task<Void, Never>?
     private var started = false
 
-    var blocksNewSession: Bool { state == .installing }
-    var isWorking: Bool { [.checking, .downloading, .installing].contains(state) }
-    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0" }
-
-    func start() {
-        guard !started else { return }; started = true
-        guard !AppBuildIdentity.isTestBuild else { return }
-        if checksAutomatically { check(manual: false) }
-        periodicCheck = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(24 * 60 * 60))
-                guard !Task.isCancelled, let self else { return }
-                if self.checksAutomatically { self.check(manual: false) }
+    init(defaults: UserDefaults = .standard, installedVersion: String? = nil, installedBuild: Int? = nil,
+         installedApp: URL? = nil, stagingParent: URL? = nil,
+         updatesEnabled: Bool = !AppBuildIdentity.isTestBuild,
+         transport: (@Sendable (URL, Int64, Int64?) async throws -> URL)? = nil) {
+        self.defaults = defaults; self.installedVersion = installedVersion; self.installedBuild = installedBuild
+        self.installedApp = installedApp
+        self.stagingParent = stagingParent
+        self.updatesEnabled = updatesEnabled; self.transport = transport
+        self.checksAutomatically = updatesEnabled &&
+            (defaults.object(forKey: "checkUpdatesAutomatically") as? Bool ?? true)
+        if updatesEnabled, let data = defaults.data(forKey: Self.requirementCacheKey),
+           let cached = try? UpdateRequirement.restored(data) {
+            requirement = cached
+            requiredUpdate = cached.blocks(installedBuild: currentBuild)
+            if requiredUpdate {
+                candidate = cached.candidate.isNewer(than: (try? UpdateVersion(currentVersion)) ?? cached.candidate.version,
+                                                     build: currentBuild) ? cached.candidate : nil
+                state = candidate == nil ? .failed : .available
+                message = requiredMessage
             }
         }
     }
 
-    func check(manual: Bool = true) {
+    var blocksNewSession: Bool { requiredUpdate || state == .installing }
+    var isWorking: Bool { [.checking, .downloading, .installing].contains(state) }
+    var currentVersion: String { installedVersion ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0" }
+    var currentBuild: Int {
+        installedBuild ?? (try? UpdateBuild.parse(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")) ?? 0
+    }
+    private var requiredMessage: String {
+        "An update is required before starting a new session. Finish any current session first, then update mac2jb." +
+        (candidate.map { " Required release: \($0.displayVersion)." } ?? " Check for updates to continue.")
+    }
+
+    func start() {
+        guard !started else { return }; started = true
+        guard updatesEnabled else { return }
+        // Required policy is checked even if optional automatic updates are off.
+        check(manual: false, policyCheck: true)
+        periodicCheck = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(24 * 60 * 60))
+                guard !Task.isCancelled, let self else { return }
+                self.check(manual: false, policyCheck: true)
+            }
+        }
+    }
+
+    func check(manual: Bool = true, policyCheck: Bool = false) {
         guard updatesAllowed(manual: manual) else { return }
         guard !isWorking, state != .ready else { return }
-        if !manual, let last = UserDefaults.standard.object(forKey: "lastUpdateCheck") as? Date,
-           Date().timeIntervalSince(last) < 6 * 60 * 60 { return }
-        candidate = nil; state = .checking; message = "Checking for updates…"
+        let last = defaults.object(forKey: "lastUpdateCheck") as? Date
+        let optionalDue = last.map { Date().timeIntervalSince($0) >= 6 * 60 * 60 } ?? true
+        if !manual, !policyCheck, !optionalDue { return }
+        let offerOptional = manual || checksAutomatically && optionalDue
+        state = .checking; message = requiredUpdate ? requiredMessage : "Checking for updates…"
         task = Task {
             do {
                 let url = URL(string: "https://api.github.com/repos/cpypwn/mac2jb/releases/latest")!
-                let file = try await Self.fetch(url, limit: 1024 * 1024)
+                let file = try await fetchFile(url, limit: 1024 * 1024)
                 defer { try? FileManager.default.removeItem(at: file) }
                 let release = try JSONDecoder().decode(UpdateRelease.self, from: Data(contentsOf: file))
                 let update = try release.validated()
-                UserDefaults.standard.set(Date(), forKey: "lastUpdateCheck")
-                if update.version > (try UpdateVersion(currentVersion)) {
+                if let known = requirement {
+                    requirement = try known.incorporating(release)
+                } else if let minimum = update.minimumBuild, minimum > 0 {
+                    requirement = try UpdateRequirement(release)
+                }
+                if let requirement {
+                    defaults.set(try requirement.encoded(), forKey: Self.requirementCacheKey)
+                }
+                requiredUpdate = requirement?.blocks(installedBuild: currentBuild) ?? false
+                if offerOptional { defaults.set(Date(), forKey: "lastUpdateCheck") }
+                let installed = try UpdateVersion(currentVersion)
+                if requiredUpdate {
+                    let choices = [update, requirement?.candidate].compactMap { $0 }.filter {
+                        $0.isNewer(than: installed, build: currentBuild) && ($0.build ?? 0) >= (requirement?.minimumBuild ?? 0)
+                    }
+                    candidate = choices.max {
+                        $0.version == $1.version ? ($0.build ?? 0) < ($1.build ?? 0) : $0.version < $1.version
+                    }
+                    state = candidate == nil ? .failed : .available
+                    message = requiredMessage
+                } else if update.isNewer(than: installed, build: currentBuild), offerOptional {
                     candidate = update; state = .available
-                    message = "mac2jb \(update.version.text) is available."
+                    message = "mac2jb \(update.displayVersion) is available."
                 } else {
                     candidate = nil; state = manual ? .current : .idle
                     message = "You’re up to date — mac2jb \(currentVersion)."
                 }
             } catch {
-                if manual {
-                    state = .failed; message = "Could not check for updates: \(error.localizedDescription)"
-                    if diagnosticURL == nil, let folder = try? Self.makeStagingDirectory() {
+                if manual || requiredUpdate {
+                    state = .failed; message = (requiredUpdate ? requiredMessage + " " : "") +
+                        "Could not check for updates: \(error.localizedDescription)"
+                    if diagnosticURL == nil, let folder = try? Self.makeStagingDirectory(parent: stagingParent) {
                         diagnosticURL = folder.appendingPathComponent("update.log")
                     }
                     log(message)
@@ -94,15 +156,15 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
 
     func download() {
         guard updatesAllowed(manual: true) else { return }
-        guard state == .available, let candidate else { return }
+        guard state == .available || state == .failed, let candidate else { return }
         plan = nil; diagnosticURL = nil
-        state = .downloading; progress = 0; message = "Downloading mac2jb \(candidate.version.text)…"
+        state = .downloading; progress = 0; message = "Downloading mac2jb \(candidate.displayVersion)…"
         task = Task {
             do {
-                let root = try Self.makeStagingDirectory()
+                let root = try Self.makeStagingDirectory(parent: stagingParent)
                 diagnosticURL = root.appendingPathComponent("update.log")
                 log("Downloading stable release \(candidate.version.text) from cpypwn/mac2jb.")
-                let sums = try await Self.fetch(candidate.checksums.browser_download_url, limit: 16384,
+                let sums = try await fetchFile(candidate.checksums.browser_download_url, limit: 16384,
                                                 expected: candidate.checksums.size)
                 defer { try? FileManager.default.removeItem(at: sums) }
                 guard try UpdatePackage.sha256(sums) == UpdateRelease.digest(candidate.checksums.digest) else {
@@ -112,7 +174,7 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
                 guard try expected == UpdateRelease.digest(candidate.archive.digest) else {
                     throw UpdateFailure("The published app checksums disagree. Please try again later.")
                 }
-                let temporary = try await Self.fetch(candidate.archive.browser_download_url, limit: 200 * 1024 * 1024,
+                let temporary = try await fetchFile(candidate.archive.browser_download_url, limit: 200 * 1024 * 1024,
                                                       expected: candidate.archive.size) { [weak self] fraction in
                     Task { @MainActor in self?.progress = fraction }
                 }
@@ -120,7 +182,8 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
                 try FileManager.default.moveItem(at: temporary, to: archive)
                 message = "Verifying the downloaded app…"
                 let version = candidate.version.text
-                let app = try await Task.detached(priority: .userInitiated) {
+                let minimumBuild = requirement?.minimumBuild
+                let staged = try await Task.detached(priority: .userInitiated) {
                     guard try UpdatePackage.sha256(archive) == expected else {
                         throw UpdateFailure("The update checksum did not match. The installed app was left unchanged.")
                     }
@@ -130,18 +193,21 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
                                                              attributes: [.posixPermissions: 0o700])
                     _ = try UpdatePackage.run("/usr/bin/ditto", ["-x", "-k", archive.path, folder.path])
                     let app = folder.appendingPathComponent("mac2jb.app", isDirectory: true)
-                    try UpdatePackage.validateApp(app, version: version)
-                    return app
+                    let build = try UpdatePackage.validateApp(app, version: version, build: candidate.build,
+                                                             minimumBuild: minimumBuild)
+                    return (app, build)
                 }.value
-                let destination = Bundle.main.bundleURL.resolvingSymlinksInPath()
-                plan = UpdateInstallPlan(directory: root, destination: destination, version: version,
+                let (app, build) = staged
+                let destination = (installedApp ?? Bundle.main.bundleURL).resolvingSymlinksInPath()
+                plan = UpdateInstallPlan(directory: root, destination: destination, version: version, build: build,
+                    minimumBuild: minimumBuild,
                     originalSHA256: try UpdatePackage.sha256(destination.appendingPathComponent("Contents/MacOS/mac2jb")),
                     updateSHA256: try UpdatePackage.sha256(app.appendingPathComponent("Contents/MacOS/mac2jb")), parentPID: getpid())
                 state = .ready; progress = 1
                 message = "mac2jb \(version) is verified and ready to install."
                 log("Download, SHA-256, archive, bundle version, architecture, and code integrity checks passed.")
             } catch {
-                state = .failed; message = "Update failed: \(error.localizedDescription)"
+                state = .failed; message = (requiredUpdate ? requiredMessage + " " : "") + "Update failed: \(error.localizedDescription)"
                 log(message)
             }
         }
@@ -180,16 +246,27 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
 
     func dismiss() {
         guard !isWorking else { return }
+        if requiredUpdate {
+            state = candidate == nil ? .failed : .available
+            message = requiredMessage
+            return
+        }
         if state == .failed || state == .current { state = .idle; message = "" }
     }
 
     private func updatesAllowed(manual: Bool) -> Bool {
-        guard AppBuildIdentity.isTestBuild else { return true }
+        guard !updatesEnabled else { return true }
         if manual {
             candidate = nil; state = .current
             message = AppBuildIdentity.updatesDisabledMessage
         }
         return false
+    }
+
+    private func fetchFile(_ url: URL, limit: Int64, expected: Int64? = nil,
+                           progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL {
+        if let transport { return try await transport(url, limit, expected) }
+        return try await Self.fetch(url, limit: limit, expected: expected, progress: progress)
     }
 
     func revealLog() { if let diagnosticURL { NSWorkspace.shared.activateFileViewerSelecting([diagnosticURL]) } }
@@ -208,14 +285,18 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
         }
     }
 
-    private static func makeStagingDirectory() throws -> URL {
+    private static func makeStagingDirectory(parent customParent: URL? = nil) throws -> URL {
         let manager = FileManager.default
-        let support = try manager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let parent = support.appendingPathComponent("mac2jb/Updates", isDirectory: true)
+        let parent: URL
+        if let customParent { parent = customParent }
+        else {
+            let support = try manager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            parent = support.appendingPathComponent("mac2jb/Updates", isDirectory: true)
+        }
         try manager.createDirectory(at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let resolved = parent.resolvingSymlinksInPath()
         var info = stat()
-        guard lstat(parent.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR, info.st_uid == getuid(), parent == resolved else {
+        guard lstat(parent.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR, info.st_uid == getuid(), parent.path == resolved.path else {
             throw UpdateFailure("The update folder is not a regular directory owned by this user.")
         }
         try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path)

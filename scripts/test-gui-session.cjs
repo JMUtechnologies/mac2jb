@@ -305,3 +305,149 @@ test('Stremio launch keeps add-on configuration on helper stdin and retains the 
   session.send({action:'finish'});assert.equal((await session.done).code,0);
   assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
 });
+
+const ounceGame = {titleId:'0100000000000001',name:'Fixture game',storages:[4]};
+function ounceFixture(t, options={}) {
+  const session=fixture(t,{expectHomebrew:true});
+  const source=String.raw`
+    const fs=require('fs'); const options=OPTIONS;
+    let config,selected=false,stopping=false,pending='';
+    const emit=(type,fields={})=>console.log('MAC2JB_HOMEBREW '+JSON.stringify({type,path:process.argv[2],message:'fixture '+type,...fields}));
+    const stopped=()=>{if(stopping)return;stopping=true;fs.appendFileSync('ounce-signals.txt','TERM\n');
+      fs.writeFileSync('homebrew-stop-completed','yes');emit('stopped');setTimeout(()=>process.exit(0),20);};
+    process.on('SIGTERM',stopped);
+    fs.writeFileSync('homebrew-pid',String(process.pid));
+    fs.appendFileSync('homebrew-invocations.txt',process.argv[2]+'\n');
+    function running(){const host=options.wrongEndpoint?'192.0.2.50':config.consoleAddress;
+      emit('running',{host,port:2121,ftpURL:'ftp://'+host+':2121'});
+      if(options.exitAfterRunningZero)setTimeout(()=>process.exit(0),10);
+      if(options.cleanupBlocked)setTimeout(()=>emit('failed',{cleanupBlocked:true}),20);
+    }
+    process.stdin.setEncoding('utf8');process.stdin.on('data',bytes=>{pending+=bytes;let at;
+      while((at=pending.indexOf('\n'))>=0){const line=pending.slice(0,at);pending=pending.slice(at+1);const value=JSON.parse(line);
+        if(!config){config=value;fs.writeFileSync('ounce-config.json',JSON.stringify(config));emit('started');
+          if(options.startupFail){fs.writeFileSync('homebrew-stop-completed','yes');emit('failed',{cleanupBlocked:false});setTimeout(()=>process.exit(1),20);continue;}
+          if(options.prematureRunning){running();continue;}
+          emit('catalog',{games:options.catalog||[{titleId:'0100000000000001',name:'Fixture game',storages:[4]}]});
+          if(options.exitAfterCatalogZero)setTimeout(()=>process.exit(0),10);
+          if(options.failedWhileChoosing)setTimeout(()=>emit('failed',{cleanupBlocked:true}),20);
+        }else{
+          fs.appendFileSync('ounce-selections.jsonl',JSON.stringify(value)+'\n');
+          if(value.action!=='select-game'||selected)process.exit(8);
+          selected=true;setTimeout(running,20);
+        }
+      }
+    });process.stdin.resume();setInterval(()=>{},1000);
+  `.replace('OPTIONS',JSON.stringify(options));
+  fs.writeFileSync(path.join(session.root,'scripts/gui-ouncecake.cjs'),source);
+  return session;
+}
+async function ounceHeld(session) {
+  await session.wait('post-run-ready');session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
+}
+async function ounceLaunch(session) {
+  await ounceHeld(session);session.send({action:'launch-ouncecake',consoleAddress:'192.0.2.20'});return session.wait('homebrew-catalog');
+}
+function noNativeCleanup(session,outcome) {
+  assert.equal(outcome.code,1,outcome.output+outcome.error);
+  assert.equal(session.events().some(event=>event.type==='verified'),false);
+  assert.equal(fs.existsSync(path.join(session.host,'runner-signals.txt')),false,'Base runner must not receive native-cleanup SIGTERM');
+  assert.equal(fs.existsSync(path.join(session.host,'group-signal.txt')),false,'Base descendants must not receive cleanup signals');
+}
+
+test('OunceCake requires confirmed held RPC, an explicit console IP and one tool per session',{timeout:10000},async t=>{
+  const session=ounceFixture(t);
+  await session.wait('post-run-ready');session.send({action:'launch-ouncecake',consoleAddress:'192.0.2.20'});await session.wait('action-rejected');
+  session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
+  for(const consoleAddress of [undefined,'192.0.2.20:2121']){session.send({action:'launch-ouncecake',consoleAddress});await session.wait('action-rejected',consoleAddress===undefined?2:3);}
+  assert.equal(fs.existsSync(path.join(session.root,'homebrew-invocations.txt')),false);
+  session.send({action:'launch-ouncecake',consoleAddress:'192.0.2.20'});const catalog=await session.wait('homebrew-catalog');
+  assert.deepEqual(catalog.games,[ounceGame]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(session.root,'ounce-config.json'),'utf8')),{consoleAddress:'192.0.2.20',port:2121});
+  session.send({action:'launch-hblauncher'});await session.wait('action-rejected',4);
+  session.send({action:'select-ouncecake-game',titleId:ounceGame.titleId});const running=await session.wait('homebrew-running');
+  assert.equal(running.host,'192.0.2.20');assert.equal(running.port,2121);assert.equal(running.ftpURL,'ftp://192.0.2.20:2121');
+  session.send({action:'finish'});assert.equal((await session.done).code,0);
+  assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
+  assert.equal(fs.readFileSync(path.join(session.root,'homebrew-invocations.txt'),'utf8').trim().split('\n').length,1);
+});
+
+test('OunceCake selection accepts one catalog member and rejects invalid, stale and repeated choices',{timeout:10000},async t=>{
+  const session=ounceFixture(t);await ounceLaunch(session);
+  for(const titleId of ['not-a-title','0100000000000002']){session.send({action:'select-ouncecake-game',titleId});await session.wait('action-rejected',titleId==='not-a-title'?1:2);}
+  assert.equal(fs.existsSync(path.join(session.root,'ounce-selections.jsonl')),false);
+  session.send({action:'select-ouncecake-game',titleId:ounceGame.titleId});await session.wait('homebrew-running');
+  session.send({action:'select-ouncecake-game',titleId:ounceGame.titleId});await session.wait('action-rejected',3);
+  assert.deepEqual(fs.readFileSync(path.join(session.root,'ounce-selections.jsonl'),'utf8').trim().split('\n').map(JSON.parse),[{action:'select-game',titleId:ounceGame.titleId}]);
+  session.send({action:'finish'});assert.equal((await session.done).code,0);
+});
+
+test('Finish while OunceCake is choosing a game stops the helper before base cleanup',{timeout:10000},async t=>{
+  const session=ounceFixture(t);await ounceLaunch(session);session.send({action:'finish'});
+  assert.equal((await session.done).code,0);
+  assert.equal(fs.existsSync(path.join(session.root,'ounce-selections.jsonl')),false);
+  assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
+});
+
+test('closing OunceCake catalog controls stops its helper before base cleanup',{timeout:10000},async t=>{
+  const session=ounceFixture(t);await ounceLaunch(session);session.child.stdin.end();
+  assert.equal((await session.done).code,0);
+  assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
+  assert.equal(fs.existsSync(path.join(session.root,'ounce-selections.jsonl')),false);
+});
+
+for(const option of ['prematureRunning','wrongEndpoint'])test(`OunceCake rejects ${option} before publishing FTP readiness`,{timeout:10000},async t=>{
+  const session=ounceFixture(t,{[option]:true});
+  if(option==='prematureRunning'){await ounceHeld(session);session.send({action:'launch-ouncecake',consoleAddress:'192.0.2.20'});}
+  else{await ounceLaunch(session);session.send({action:'select-ouncecake-game',titleId:ounceGame.titleId});}
+  await session.wait('homebrew-stopped');
+  assert.equal(session.events().some(event=>event.type==='homebrew-running'),false);
+  session.send({action:'finish'});const outcome=await session.done;
+  assert.equal(outcome.code,1);assert.equal(session.events().some(event=>event.type==='verified'),false);
+  assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
+});
+
+test('OunceCake startup failure is reported once, permits Finish and cannot verify workflow success',{timeout:10000},async t=>{
+  const session=ounceFixture(t,{startupFail:true});await ounceHeld(session);session.send({action:'launch-ouncecake',consoleAddress:'192.0.2.20'});
+  await session.wait('homebrew-failed');session.send({action:'finish'});const outcome=await session.done;
+  assert.equal(outcome.code,1);assert.equal(session.events().some(event=>event.type==='verified'),false);
+  assert.equal(session.events().filter(event=>event.type==='homebrew-failed').length,1);
+  assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
+});
+
+test('OunceCake cleanupBlocked rejects Finish and Stop kills only local processes without native cleanup',{timeout:10000},async t=>{
+  const session=ounceFixture(t,{cleanupBlocked:true});await ounceLaunch(session);
+  session.send({action:'select-ouncecake-game',titleId:ounceGame.titleId});await session.wait('homebrew-running');
+  assert.equal((await session.wait('homebrew-failed')).cleanupBlocked,true);
+  session.send({action:'finish'});await session.wait('action-rejected');
+  assert.equal(fs.existsSync(path.join(session.host,'runner-signals.txt')),false);
+  session.child.kill('SIGTERM');noNativeCleanup(session,await session.done);
+  assert.equal(fs.existsSync(path.join(session.root,'ounce-signals.txt')),false,'Uncertain helper must not execute another native shutdown');
+});
+
+test('OunceCake rejects a stale game choice after its helper reports failure',{timeout:10000},async t=>{
+  const session=ounceFixture(t,{failedWhileChoosing:true});await ounceLaunch(session);await session.wait('homebrew-failed');
+  session.send({action:'select-ouncecake-game',titleId:ounceGame.titleId});await session.wait('action-rejected');
+  assert.equal(fs.existsSync(path.join(session.root,'ounce-selections.jsonl')),false);
+  session.child.stdin.end();noNativeCleanup(session,await session.done);
+});
+
+for(const option of ['exitAfterCatalogZero','exitAfterRunningZero'])test(`OunceCake zero exit without stop confirmation blocks native cleanup (${option})`,{timeout:10000},async t=>{
+  const session=ounceFixture(t,{[option]:true});await ounceLaunch(session);
+  if(option==='exitAfterRunningZero'){session.send({action:'select-ouncecake-game',titleId:ounceGame.titleId});await session.wait('homebrew-running');}
+  assert.equal((await session.wait('homebrew-failed')).cleanupBlocked,true);
+  session.child.stdin.end();noNativeCleanup(session,await session.done);
+});
+
+test('OunceCake loses its original held endpoint without another native cleanup request',{timeout:10000},async t=>{
+  const session=ounceFixture(t);await ounceLaunch(session);process.kill(session.pid(),'SIGUSR1');
+  noNativeCleanup(session,await session.done);
+  assert.equal(fs.existsSync(path.join(session.root,'ounce-signals.txt')),false);
+});
+
+test('OunceCake large catalog survives the helper output boundary',{timeout:10000},async t=>{
+  const games=Array.from({length:500},(_,index)=>({titleId:(0x100000000000000n+BigInt(index)).toString(16).padStart(16,'0'),name:'x'.repeat(160),storages:[4]}));
+  assert.ok(Buffer.byteLength(JSON.stringify(games))>65536);
+  const session=ounceFixture(t,{catalog:games});const event=await ounceLaunch(session);
+  assert.deepEqual(event.games,games);session.send({action:'finish'});assert.equal((await session.done).code,0);
+});

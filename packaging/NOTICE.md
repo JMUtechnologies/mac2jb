@@ -119,6 +119,15 @@ The root MIT license applies to mac2jb; it does not relicense third-party code.
   under `packaging/ftpd-sb-v0.1.0-*`. Its README states that no blanket license
   has been assigned; third-party terms remain applicable. The mac2jb root
   license does not relicense this package.
+- OunceCake: [misshexa66](https://github.com/misshexa66/OunceCake), commit
+  `e3bcbd229be2229d44f036455adddda921ade3b2`, is distributed as a separate
+  Node tool under GPL version 2. Its complete corresponding source, native
+  source and build files, prebuilt console image, LICENSE and upstream README
+  are included under `vendor/OunceCake` and in the source archive. Upstream
+  Atmosphere attribution is retained. Dated downstream changes strengthen FTP
+  startup and shutdown confirmation; their source is included. Original and
+  bundled per-file hashes and the native image digest are recorded under
+  `packaging/OunceCake-*`. The mac2jb MIT license does not relicense OunceCake.
 - Node.js: the bundled version's complete upstream LICENSE, including its
   third-party notices, is included as `licenses/node-LICENSE.txt`. The runtime
   version and local-binary hash are recorded in `licenses/node-provenance.json`.

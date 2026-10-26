@@ -38,9 +38,9 @@ struct ContentView: View {
         case .rpcHeld: return "Your RPC session is open."
         case .dumpingFirmware: return "Saving system code."
         case .rpcFinishing: return "Finishing the session."
-        case .launchingHomebrew: return "Starting \(model.homebrewTitle)."
+        case .launchingHomebrew: return model.postRun.homebrewStage == .selecting ? "Choose a game." : "Starting \(model.homebrewTitle)."
         case .homebrewRunning: return "\(model.homebrewTitle) is running."
-        case .homebrewStopped: return "Finish the homebrew session."
+        case .homebrewStopped: return model.postRun.cleanupBlocked ? "Restart the console." : "Finish the homebrew session."
         case .verified: return "FS execution verified."
         case .failed: return "Let’s check what happened."
         case .cancelled: return "Session stopped."
@@ -119,6 +119,10 @@ struct ContentView: View {
     private var updateStatus: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(updater.message).font(.system(size: 12, weight: .medium)).foregroundStyle(ink)
+            if updater.requiredUpdate {
+                Text("Update mac2jb before starting a new session. You can finish the current session first.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
             if updater.state == .downloading { ProgressView(value: updater.progress).tint(teal) }
             HStack {
                 if updater.state == .available {
@@ -145,7 +149,7 @@ struct ContentView: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if updater.state == .current || updater.state == .failed {
+                if !updater.requiredUpdate && (updater.state == .current || updater.state == .failed) {
                     Button("Dismiss") { updater.dismiss() }.buttonStyle(.plain)
                 }
             }.font(.system(size: 11))
@@ -448,6 +452,8 @@ struct ContentView: View {
             Text("Includes ftpd-sb v0.1.0 in HBLauncher’s app menu.")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
             Divider()
+            ounceCakeControls
+            Divider()
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "play.rectangle").font(.system(size: 22)).foregroundStyle(teal)
                 VStack(alignment: .leading, spacing: 5) {
@@ -493,6 +499,54 @@ struct ContentView: View {
         return "Waiting for this app’s held RPC session to be confirmed and idle."
     }
 
+    private var ounceCakeControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "externaldrive").font(.system(size: 22)).foregroundStyle(teal)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("OunceCake").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+                    Text("Read-only game files over FTP. Start Held RPC above, then open the game list.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if !model.postRun.homebrewAttempted || !model.hasLiveWorkers {
+                        TextField("Switch IP address", text: $model.ounceCakeConsoleAddress)
+                            .textFieldStyle(.roundedBorder).font(.system(size: 11)).frame(maxWidth: 240)
+                        Text("Use the address in your Switch’s network settings, not this Mac’s address.")
+                            .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 8)
+                Button(model.ounceCakeSession.hasStarted ? homebrewActionTitle : "Open game list") { model.launchOunceCake() }
+                    .font(.system(size: 11, weight: .medium)).disabled(!model.canLaunchOunceCake)
+            }
+            if model.ounceCakeSession.stage == .choosing {
+                Text("Choose a game").font(.system(size: 12, weight: .semibold))
+                Picker("Game", selection: $model.selectedOunceCakeGame) {
+                    ForEach(model.ounceCakeSession.games) { game in Text(game.name).tag(game.titleId) }
+                }.font(.system(size: 12))
+                if let game = model.ounceCakeSession.games.first(where: { $0.titleId == model.selectedOunceCakeGame }) {
+                    Text(game.titleId.uppercased() + " · " + game.storageDescription)
+                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                }
+                Button("Start FTP") { model.startOunceCakeFTP() }
+                    .font(.system(size: 11, weight: .medium)).disabled(!model.canSelectOunceCakeGame)
+            }
+            if let endpoint = model.ounceCakeSession.endpoint, model.postRun.stage == .held,
+               model.postRun.homebrewStage == .running {
+                Text("Game files are ready").font(.system(size: 12, weight: .semibold)).foregroundStyle(teal)
+                if let game = model.ounceCakeSession.selectedGame {
+                    Text(game.name).font(.system(size: 12))
+                }
+                HStack(spacing: 16) {
+                    Text("Address: " + endpoint.host).textSelection(.enabled)
+                    Text("Port \(endpoint.port)")
+                    Button("Copy FTP address") { model.copyOunceCakeAddress() }
+                }.font(.system(size: 11, design: .monospaced))
+                Text("No username or password · Binary transfer mode")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var stremioAccountControls: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 10) {
@@ -522,6 +576,7 @@ struct ContentView: View {
         switch model.postRun.homebrewStage {
         case .idle: return "Launch HBLauncher"
         case .launching: return "Starting…"
+        case .selecting: return "Choose a game"
         case .running: return "Running"
         case .stopped, .failed: return "Launch unavailable"
         }
@@ -596,7 +651,7 @@ struct ContentView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             Button("Setup guide ↗") {
-                NSWorkspace.shared.open(URL(string: "https://github.com/cpypwn/mac2jb#prerequisites-and-important-security-notes")!)
+                NSWorkspace.shared.open(URL(string: "https://github.com/cpypwn/mac2jb#prerequisites")!)
             }.buttonStyle(.plain).foregroundStyle(teal)
         }.font(.system(size: 10)).foregroundStyle(.secondary))
     }

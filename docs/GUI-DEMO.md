@@ -1,7 +1,7 @@
 # mac2jb GUI
 
-mac2jb v0.4.2 provides the ns2jb workflow, HBLauncher and an experimental
-Stremio-compatible player. A completed Mac-side transfer does not prove that
+mac2jb v0.4.3 provides the ns2jb workflow, HBLauncher, OunceCake game-content
+export and an experimental Stremio-compatible player. A completed Mac-side transfer does not prove that
 the console accepted the input or that ns2jb succeeded; the host independently
 verifies execution, restoration and cleanup.
 
@@ -13,7 +13,7 @@ completed count after that line finishes.
 
 ## Run the app
 
-On an Apple Silicon Mac running macOS 14 or newer, download [the v0.4.2 app ZIP](https://github.com/cpypwn/mac2jb/releases/download/v0.4.2/mac2jb-v0.4.2-macos-arm64.zip), extract it and open mac2jb.app. Its executable bundles the sender tools, Node.js runtime, host source, bootstrap, unsigned USB driver, and notices. The app also includes HBLauncher v0.2.0, ftpd-sb v0.1.0, and the required companion tools and fonts. You do not need a Pico, a separate Python or Node.js installation, Xcode, or command-line tools to run the prepared app. It extracts its embedded payload into a private session folder.
+On an Apple Silicon Mac running macOS 14 or newer, download [the v0.4.3 app ZIP](https://github.com/cpypwn/mac2jb/releases/download/v0.4.3/mac2jb-v0.4.3-macos-arm64.zip), extract it and open mac2jb.app. Its executable bundles the sender tools, Node.js runtime, host source, bootstrap, unsigned USB driver, and notices. The app also includes HBLauncher v0.2.0, ftpd-sb v0.1.0, OunceCake, and the required companion tools and fonts. You do not need a Pico, a separate Python or Node.js installation, Xcode, or command-line tools to run the prepared app. It extracts its embedded payload into a private session folder.
 
 The app is ad hoc signed, not Developer ID signed or notarized. If a downloaded copy is blocked by Gatekeeper, try opening it, then use System Settings → Privacy & Security → Open Anyway, if macOS offers it. See [Apple’s guidance for opening an app from an unidentified developer](https://support.apple.com/en-us/102445). Do not change kernel-security settings to address a Gatekeeper app warning.
 
@@ -37,8 +37,8 @@ Select the Mac’s IPv4 address on the same network as the Switch. The GUI keeps
 
 ### Choose a mode before starting
 
-SmileBASIC edition: v0.4.2 adds I’m using the
-SmileBASIC demo above the bootstrap/exploit choices. This checkbox is off by
+SmileBASIC edition: I’m using the SmileBASIC demo appears above the
+bootstrap/exploit choices. This checkbox is off by
 default and remembered between launches. Select it for the demo; leave it
 unchecked for the full game. The selected edition stays fixed during a run.
 
@@ -112,6 +112,12 @@ To add apps, use Open session logs, then open vendor → HBLauncher → apps
 and copy in each complete prebuilt app folder. Return to the launcher menu and
 select Refresh. See [app installation and persistence](HOMEBREW.md#adding-hblauncher-apps).
 
+For game-content export, enter the Switch IP address in OunceCake from a fresh
+Held RPC session and choose Open game list. Choose a game, then Start FTP. After FTP is ready, connect to the Switch 2's IP
+on port `2121` with plain anonymous FTP, passive mode and Binary/Image (TYPE I)
+transfers. This read-only game-content server is separate from ftpd-sb on port
+`5000`. See the [OunceCake guide](OUNCECAKE.md) for steps and output limits.
+
 Alternatively, choose Launch Stremio directly from a fresh Held RPC session.
 Only one homebrew application can be launched per session. Stremio must be
 installed on the Mac; see the [player guide](STREMIO-EXPERIMENTAL.md) for supported
@@ -144,9 +150,16 @@ post-bootstrap commands begin or an exploit attempt fails.
 
 ## GUI updates
 
-Use mac2jb → Check for Updates…, or leave Check for Updates Automatically enabled. Automatic checks run at launch if at least six hours have passed since the last successful check, then daily while the app stays open. Choose Download update and, after the current session/driver work finishes, Restart & update. The app verifies the download and app bundle, keeps a backup of the old app, and reopens the new version. A failed replacement restores the old app; errors show the private updater log path.
+v0.4.3 is available through Check for Updates or the
+[current app ZIP](https://github.com/cpypwn/mac2jb/releases/download/v0.4.3/mac2jb-v0.4.3-macos-arm64.zip).
+Older clients can offer this higher version; they cannot be forced to update
+remotely. This version supports required updates for future releases: a known
+required update blocks new sessions while existing sessions can finish. Updates
+still require your download and installation actions; nothing installs silently.
 
-Updating affects the app only. Drivers, Recovery settings, and existing session logs are left in place. Your app folder must be writable; macOS security checks remain in effect. The updater trusts the public mac2jb GitHub repository over HTTPS and validates GitHub digests and the release checksum file; the app remains ad-hoc signed. If your older app has no updater, download v0.4.2 manually. The CLI is updated separately.
+Use mac2jb → Check for Updates…, or leave Check for Updates Automatically enabled. Optional update notices respect that toggle and the six-hour check interval. Required-update policy is checked at every stable launch and daily while open, even with optional checks off. A known requirement remains in effect if a later check or download fails; a network failure alone does not create a requirement. Choose Download update and, after the current session/driver work finishes, Restart & update. The app verifies the download and app bundle, keeps a backup of the old app, and reopens the new version. A failed replacement restores the old app; errors show the private updater log path.
+
+Updating affects the app only. Drivers, Recovery settings, and existing session logs are left in place. Your app folder must be writable; macOS security checks remain in effect. The updater trusts the public mac2jb GitHub repository over HTTPS and validates GitHub digests and the release checksum file; the app remains ad-hoc signed. If your older app has no updater, download v0.4.3 manually. The CLI is updated separately.
 
 ## Session data and distribution
 

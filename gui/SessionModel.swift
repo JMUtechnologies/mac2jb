@@ -25,6 +25,11 @@ private struct GUIEvent: Decodable {
     let remainingMs: Double?
     let durationMs: Double?
     let watchProgress: StremioWatchProgress?
+    let games: [OunceCakeGame]?
+    let host: String?
+    let port: Int?
+    let ftpURL: String?
+    let cleanupBlocked: Bool?
 }
 
 @MainActor final class SessionModel: ObservableObject {
@@ -70,6 +75,9 @@ private struct GUIEvent: Decodable {
     @Published private(set) var homebrewFolder: URL?
     @Published private(set) var homebrewTitle = "HBLauncher v0.2.0"
     @Published var stremioAddonURL = ""
+    @Published var ounceCakeConsoleAddress = ""
+    @Published var selectedOunceCakeGame = ""
+    @Published private(set) var ounceCakeSession = OunceCakeSession()
     var accountProgressHandler: ((StremioWatchProgress) -> Void)?
     var stremioToolsAvailable: Bool {
         FileManager.default.isExecutableFile(atPath: "/Applications/Stremio.app/Contents/MacOS/ffmpeg") &&
@@ -102,6 +110,11 @@ private struct GUIEvent: Decodable {
     var canLaunchHomebrew: Bool {
         phase == .rpcHeld && activeRunMode == .heldRPC && postRun.canLaunchHomebrew &&
         hostProcess?.isRunning == true && hostInput != nil && runFolder != nil
+    }
+    var canLaunchOunceCake: Bool { canLaunchHomebrew && OunceCakeSession.validConsoleAddress(ounceCakeConsoleAddress) != nil }
+    var canSelectOunceCakeGame: Bool {
+        postRun.canSelectHomebrew && ounceCakeSession.stage == .choosing &&
+        ounceCakeSession.games.contains { $0.titleId == selectedOunceCakeGame } && hostProcess?.isRunning == true
     }
     var canReturnToStart: Bool { phase == .verified && !hasLiveWorkers && !driverSetupRunning }
 
@@ -221,6 +234,7 @@ private struct GUIEvent: Decodable {
         error = nil; progress = nil; progressLabel = ""; isEnumerating = false; hostCompleted = false; runFolder = nil
         postRun = PostRunSessionState(); rpcCommand = ""; rpcStatus = ""; dumpFolder = nil
         homebrewMessage = ""; homebrewFolder = nil; homebrewTitle = "HBLauncher v0.2.0"
+        ounceCakeSession = OunceCakeSession(); selectedOunceCakeGame = ""
         hasEnumeratedSuccessfully = false
         resetBootstrapTiming()
         hostStageLabel = "Waiting for the Switch to connect over the local network"
@@ -255,6 +269,7 @@ private struct GUIEvent: Decodable {
         status = "Session stopped"
         error = nil
         postRun.stop()
+        if ounceCakeSession.hasStarted { ounceCakeSession.stop() }
         append("Stop requested. Only this app’s worker processes are being stopped.")
         appendBootstrapDuration(outcome: "cancelled")
         stopWorkers()
@@ -290,6 +305,36 @@ private struct GUIEvent: Decodable {
         postRun.launchHomebrew()
         homebrewMessage = "Starting \(homebrewTitle) in the current held session…"
         presentPostRunState()
+    }
+
+    func launchOunceCake() {
+        guard canLaunchOunceCake else { return }
+        var session = OunceCakeSession()
+        guard session.begin(consoleAddress: ounceCakeConsoleAddress),
+              sendHostControl(["action": "launch-ouncecake", "consoleAddress": session.consoleAddress]) else { return }
+        ounceCakeSession = session; selectedOunceCakeGame = ""
+        homebrewTitle = "OunceCake"
+        postRun.launchHomebrew()
+        homebrewMessage = "Reading the game list from the current held session…"
+        presentPostRunState()
+    }
+
+    func startOunceCakeFTP() {
+        guard canSelectOunceCakeGame else { return }
+        var session = ounceCakeSession
+        guard session.select(titleId: selectedOunceCakeGame),
+              sendHostControl(["action": "select-ouncecake-game", "titleId": selectedOunceCakeGame]),
+              postRun.selectHomebrew() else { return }
+        ounceCakeSession = session
+        homebrewMessage = "Preparing the selected game. This can take several minutes."
+        presentPostRunState()
+    }
+
+    func copyOunceCakeAddress() {
+        guard postRun.stage == .held, postRun.homebrewStage == .running,
+              let endpoint = ounceCakeSession.endpoint else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(endpoint.address, forType: .string)
     }
 
     func copyRPCCommand() {
@@ -342,6 +387,10 @@ private struct GUIEvent: Decodable {
                 phase = .launchingHomebrew; status = "Starting \(homebrewTitle)"
                 detail = "This app uses the current verified held RPC session. Keep SmileBASIC open while it starts."
                 progress = nil; progressLabel = homebrewMessage
+            case .selecting:
+                phase = .launchingHomebrew; status = "Choose a game"
+                detail = "Choose a game below, then start its read-only FTP server. Keep SmileBASIC open."
+                progress = nil; progressLabel = "Game list ready"
             case .running:
                 phase = .homebrewRunning; status = "\(homebrewTitle) is running"
                 detail = "Finish session stops the homebrew video, audio and services before releasing the held endpoint and verifying cleanup."
@@ -359,6 +408,10 @@ private struct GUIEvent: Decodable {
             phase = .rpcFinishing; status = "Finishing the session"
             detail = "Wait while the host releases the endpoint and verifies final cleanup. Keep SmileBASIC open."
             progress = nil; progressLabel = "Waiting for final cleanup verification"
+        case .blocked:
+            phase = .homebrewStopped; status = "Restart the console"
+            detail = "Cleanup could not be confirmed. Restart the console, then stop this session. Keep the logs."
+            progress = nil; progressLabel = homebrewMessage
         default: break
         }
     }
@@ -436,7 +489,7 @@ private struct GUIEvent: Decodable {
                         await self?.receive(event, role: role, generation: currentGeneration)
                     }
                 }
-                if pending.count > 131072 { pending.removeAll() }
+                if pending.count > 1024 * 1024 { pending.removeAll() }
             }
             if !pending.isEmpty, let event = try? JSONDecoder().decode(GUIEvent.self, from: pending) {
                 await self?.receive(event, role: role, generation: currentGeneration)
@@ -449,6 +502,15 @@ private struct GUIEvent: Decodable {
 
     private func receive(_ event: GUIEvent, role: String, generation expected: UUID) {
         guard expected == generation else { return }
+        if role == "host", event.type == "cleanup-blocked" || event.cleanupBlocked == true {
+            guard postRun.receive("cleanup-blocked") else { return }
+            if ounceCakeSession.hasStarted { ounceCakeSession.stop(cleanupBlocked: true) }
+            if let folder = sessionURL(event.path) { homebrewFolder = folder }
+            homebrewMessage = event.message ?? "The tool could not confirm that its server stopped safely."
+            append(homebrewMessage, channel: .host)
+            presentPostRunState()
+            return
+        }
         if event.type == "account-progress" {
             guard role == "host", postRun.homebrewAttempted, homebrewTitle.contains("Stremio"),
                   let update = event.watchProgress else { return }
@@ -483,9 +545,37 @@ private struct GUIEvent: Decodable {
             presentPostRunState()
         case "homebrew-started", "homebrew-running", "homebrew-stopped", "homebrew-failed":
             let preserveFailure = postRun.homebrewStage == .failed && event.type == "homebrew-stopped"
+            if role == "host", event.type == "homebrew-running", ounceCakeSession.hasStarted {
+                guard postRun.stage == .held, postRun.homebrewStage == .launching,
+                      ounceCakeSession.stage == .preparing else { return }
+                guard ounceCakeSession.receiveEndpoint(host: event.host, port: event.port, ftpURL: event.ftpURL) else {
+                    postRun.receive("homebrew-failed"); ounceCakeSession.stop(failed: true)
+                    homebrewMessage = "The game server did not confirm a valid FTP address. Finish the session and keep the logs."
+                    presentPostRunState()
+                    return
+                }
+            }
             guard role == "host", postRun.receive(event.type) else { return }
             if let folder = sessionURL(event.path) { homebrewFolder = folder }
             if !preserveFailure { homebrewMessage = event.message ?? "\(homebrewTitle) session changed." }
+            if ounceCakeSession.hasStarted, !preserveFailure, ["homebrew-stopped", "homebrew-failed"].contains(event.type) {
+                ounceCakeSession.stop(failed: event.type == "homebrew-failed")
+            }
+            presentPostRunState()
+        case "homebrew-catalog":
+            guard role == "host", postRun.stage == .held, postRun.homebrewStage == .launching,
+                  ounceCakeSession.stage == .discovering else { return }
+            var session = ounceCakeSession
+            guard let games = event.games, session.receiveCatalog(games) else {
+                postRun.receive("homebrew-failed"); ounceCakeSession.stop(failed: true)
+                homebrewMessage = "The game list was invalid. Finish this session and keep the logs."
+                presentPostRunState()
+                return
+            }
+            guard postRun.receive(event.type) else { return }
+            ounceCakeSession = session; selectedOunceCakeGame = session.games.first?.titleId ?? ""
+            if let folder = sessionURL(event.path) { homebrewFolder = folder }
+            homebrewMessage = "Choose a game to make its files available over FTP."
             presentPostRunState()
         case "homebrew-progress":
             guard role == "host", phase == .launchingHomebrew || phase == .homebrewRunning else { return }
@@ -495,6 +585,7 @@ private struct GUIEvent: Decodable {
             if role == "host", postRun.homebrewStage == .launching {
                 postRun.receive("homebrew-failed")
                 homebrewMessage = event.message ?? "The host could not start \(homebrewTitle) in this session."
+                if ounceCakeSession.hasStarted { ounceCakeSession.stop(failed: true) }
                 presentPostRunState()
             }
         case "dump-started", "dump-complete":
@@ -590,7 +681,7 @@ private struct GUIEvent: Decodable {
                 progress = hostStageProgress; progressLabel = hostStageLabel
             }
         case "verified":
-            guard role == "host" else { return }
+            guard role == "host", !postRun.cleanupBlocked else { return }
             postRun.receive(event.type)
             endSessionActivity()
             workflowProgress.complete()
@@ -604,6 +695,7 @@ private struct GUIEvent: Decodable {
             if hostProcess == nil { endSessionActivity() }
             detail = SessionRecovery.message(event.message ?? "Session stopped.", interruptedPhase: phase)
             postRun.stop()
+            if ounceCakeSession.hasStarted { ounceCakeSession.stop() }
             workflowProgress.cancel()
             phase = .cancelled; status = "Session stopped"; progress = nil; progressLabel = ""; isEnumerating = false
         default: break
@@ -639,6 +731,7 @@ private struct GUIEvent: Decodable {
         if hostProcess == nil { endSessionActivity() }
         ensureFallbackLog()
         postRun.stop()
+        if ounceCakeSession.hasStarted { ounceCakeSession.stop(failed: true) }
         error = recovery; detail = recovery
         phase = .failed; status = "The session needs attention"
         progress = nil; progressLabel = ""; isEnumerating = false

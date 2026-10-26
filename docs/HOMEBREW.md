@@ -1,7 +1,7 @@
 # Homebrew in mac2jb
 
-mac2jb v0.4.2 offers HBLauncher v0.2.0 for GPU apps and Stremio · experimental
-for Mac-assisted media playback. Choose one application per fresh Held RPC
+mac2jb v0.4.3 offers HBLauncher v0.2.0 for GPU apps, OunceCake for game-content
+export, and Stremio · experimental for Mac-assisted media playback. Choose one application per fresh Held RPC
 session. The Mac and SmileBASIC must stay open throughout use.
 
 ## Start a fresh Held RPC session
@@ -19,7 +19,7 @@ session. The Mac and SmileBASIC must stay open throughout use.
    with this setup. Use Ethernet until Wi-Fi support is confirmed.
 3. Select the Mac address reachable by the console, start the run, and wait for
    4/4 verification and confirmation that RPC is open. Under Already got
-   the ns2jb exploit running?, choose Launch HBLauncher or Launch Stremio.
+   the ns2jb exploit running?, choose HBLauncher, OunceCake or Stremio.
 
 These choices reuse this app's verified live session. No Pico, second bootstrap
 or second `REMOVE` is needed. See the [GUI guide](GUI-DEMO.md) for driver setup,
@@ -77,6 +77,16 @@ In HBLauncher, select Refresh, open ftpd-sb, and press A or tap
 Start. Use the console IP and port displayed by the app, and keep the Mac
 host open until transfers finish. See the [FTP connection guide](FTPD-SB.md)
 for FileZilla settings and accessible storage.
+
+## Game-content FTP with OunceCake
+
+From a fresh verified Held RPC session, enter the Switch IP address in
+OunceCake and choose Open game list. Select one of your games, then Start FTP. Wait for FTP readiness before connecting to the
+Switch 2's IP on port `2121`. Use plain anonymous FTP, passive mode and
+Binary/Image (TYPE I) transfers. The server exposes unencrypted game content;
+it does not create NSP/XCI packages or provide system keys. This is separate
+from the ftpd-sb app on port `5000`. Follow the
+[OunceCake selection and transfer guide](OUNCECAKE.md).
 
 ## Finish or recover
 

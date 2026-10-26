@@ -40,10 +40,17 @@ If the driver already loads with your existing partial/custom SIP configuration,
    ```
 
 9. Follow the confirmation and administrator prompts. When the command confirms the change, choose Apple menu → Restart to return to macOS.
+10. After restarting, open Terminal in macOS and enter:
+
+    ```sh
+    csrutil status
+    ```
+
+    For the setup above, confirm it reports `System Integrity Protection status: disabled.` before installing the driver. If it still reports enabled, return to Recovery and repeat the SIP step for your startup disk. An existing working partial/custom configuration can report differently; this check does not replace the loaded-driver check below.
 
 ### 2. Install and load the USB driver
 
-1. Download [mac2jb v0.4.2 for Apple Silicon](https://github.com/cpypwn/mac2jb/releases/download/v0.4.2/mac2jb-v0.4.2-macos-arm64.zip), extract the ZIP, and open mac2jb.app.
+1. Download [mac2jb v0.4.3 for Apple Silicon](https://github.com/cpypwn/mac2jb/releases/download/v0.4.3/mac2jb-v0.4.3-macos-arm64.zip), extract the ZIP, and open mac2jb.app.
 2. If macOS blocks the app, open System Settings → Privacy & Security, choose Open Anyway if offered, then open mac2jb again.
 3. Click Install & load driver… and approve the administrator prompt.
 4. If macOS asks you to approve the extension, open System Settings → Privacy & Security and click Allow for the driver.
@@ -62,17 +69,18 @@ Replace it with the newly bundled [kurumuz bootstrap](assets/bootstrap.bas), whi
 
 ## Get mac2jb
 
-Download [mac2jb v0.4.2 for Apple Silicon](https://github.com/cpypwn/mac2jb/releases/download/v0.4.2/mac2jb-v0.4.2-macos-arm64.zip),
+Download [mac2jb v0.4.3 for Apple Silicon](https://github.com/cpypwn/mac2jb/releases/download/v0.4.3/mac2jb-v0.4.3-macos-arm64.zip),
 extract the ZIP, and open mac2jb.app. It requires macOS 14 or newer and
-bundles Node.js, the senders, the host, HBLauncher v0.2.0, ftpd-sb v0.1.0, and
-companion tools. The tested unsigned USB driver is included with the app and
+bundles Node.js, the senders, the host, HBLauncher v0.2.0, ftpd-sb v0.1.0,
+OunceCake, and companion tools. The tested unsigned USB driver is included with the app and
 complete source distribution; complete the [driver setup above](#before-proceeding-sip-and-usb-driver-requirements) before starting.
 See the [GUI guide](docs/GUI-DEMO.md).
 
-v0.4.2 build 403 refresh: If you already installed v0.4.2, download it again
-manually to receive this refresh; the updater only offers higher version numbers.
+v0.4.3 includes OunceCake. Existing users can choose mac2jb → Check for
+Updates… or download the ZIP above. Older clients can offer this higher-version
+release, but cannot be forced to update remotely.
 
-v0.4.2 adds demo-aware save prompts and automatic load commands. It uses the
+This release includes demo-aware save prompts and automatic load commands. It uses the
 kurumuz ns2jb fork and includes a Mac-assisted experimental Stremio-compatible
 player. Stremio startup and playback have been confirmed on
 the supported console setup; account library and watch-progress sync still need
@@ -90,7 +98,7 @@ GUI failures display the diagnostic log's exact path and an Open logs
 button. Session files stay in private per-launch folders outside the checkout;
 build folders and repository-local logs are also ignored by Git.
 
-## Prerequisites and important security notes
+## Prerequisites
 
 - An Apple silicon Mac, Nintendo Switch 2 on system software 23.0.1, SmileBASIC 4.4.9, and a data-capable USB-C connection. The prepared GUI requires macOS 14 or newer.
 - Required console keyboard layout: On the Switch 2, open System Settings → Controllers & Accessories → USB Keyboard and select US English (not UK English or AZERTY). mac2jb sends US-layout USB keycodes regardless of the Mac's keyboard layout. This applies to both bootstrap typing and post-bootstrap commands; you do not need to edit `sender.c` for an AZERTY Mac.
@@ -138,6 +146,16 @@ inspect status; repeatedly reinstalling can create another restart prompt.
 Start a fresh Held RPC run and wait for 4/4 verification, then choose Launch HBLauncher under Already got the ns2jb exploit running? to start the bundled HBLauncher v0.2.0 in the same live mac2jb session. No Pico is needed. Keep mac2jb and SmileBASIC open while using the launcher and its bundled GPU apps. Finish the session and restart the console before another run. See [the Homebrew guide](docs/HOMEBREW.md).
 
 The bundled ftpd-sb v0.1.0 is ready in HBLauncher: select Refresh, open ftpd-sb, and press A to start FTP. See [the connection guide](docs/FTPD-SB.md).
+
+For your own games, start a fresh Held RPC run, wait for 4/4 verification,
+then enter the Switch IP address in OunceCake and choose Open game list.
+Select a game and click Start FTP. Wait until FTP is ready, then
+connect an FTP client to the Switch 2's IP on port `2121`, using passive mode,
+anonymous login and Binary/Image (TYPE I) transfers. Download the exposed game
+content, disconnect, then finish the session and restart the console. OunceCake
+exports unencrypted romFS/exeFS content; it does not create NSP/XCI packages or
+provide system keys. Its game-content server is separate from ftpd-sb's port
+`5000`. See the [OunceCake guide](docs/OUNCECAKE.md).
 
 Stremio · experimental is available directly from a verified Held RPC
 session. Install Stremio on the Mac, then choose Launch Stremio; leave the
@@ -310,7 +328,7 @@ Run folders can include console memory captures and machine-specific information
 ## SmileBASIC full game versus demo
 
 The maintainer has confirmed the demo's manual save and load commands below.
-v0.4.2 adds the matching GUI demo workflow. Its command bytes, ordering and
+The GUI includes the matching demo workflow. Its command bytes, ordering and
 Enter handling are covered by hardware-free tests; automated console use
 still needs separate confirmation.
 
@@ -459,7 +477,7 @@ vendored project is an untouched full checkout.
 
 HBLauncher is pinned to [v0.2.0](https://github.com/ravensclawx/HBLauncher/releases/tag/v0.2.0),
 commit `b40723be04baa51e5d1f121a1e2242c4167b6cbc`. Its launcher, apps, assets,
-and retained notices are bundled with v0.4.2; mac2jb's bridge adapter
+and retained notices are bundled with v0.4.3; mac2jb's bridge adapter
 connects it to the active held session without the Pico keyboard workflow.
 
 The fork accepts a valid initial console greeting without the previous pairing-token authentication. Use the host on a trusted local network. Its startup cleanup removes every `NS2_GAP`-prefixed root entry on the inspected SmileBASIC `save` and `tmp` mounts; keep personal files under other names.
@@ -479,6 +497,7 @@ The complete source distribution includes the tested unsigned driver in `drivers
 - [pepsipu](https://gitlab.com/pepsipu) — [ns2jb](https://gitlab.com/pepsipu/ns2jb), the original Switch 2 exploit and FS research.
 - [kurumuz](https://gitlab.com/kurumuz) — the [ns2jb compatibility fork](https://gitlab.com/kurumuz/ns2jb) bundled in this checkout.
 - [ShinyQuagsire](https://github.com/shinyquagsire23) — [libusbd](https://github.com/shinyquagsire23/libusbd) and [macos_usb_gadget_poc](https://github.com/shinyquagsire23/macos_usb_gadget_poc), USB device emulation and experimental macOS gadget-driver work.
+- [misshexa66](https://github.com/misshexa66) — [OunceCake](https://github.com/misshexa66/OunceCake), the game-content export tool.
 - [RavensClawX](https://github.com/ravensclawx) — [HBLauncher](https://github.com/ravensclawx/HBLauncher), the SmileBASIC GPU app launcher and SDK.
 
 See the project's included licenses and upstream documentation for copyright, attribution, and reuse terms.
