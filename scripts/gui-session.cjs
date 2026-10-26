@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
 const {spawn} = require('node:child_process');
+const {networkBindFailure, networkUnavailableMessage} = require('./gui-host.cjs');
 const heldMessage = '4/4 verified. SmileBASIC RPC and FS memory endpoint remain live while this process and the app stay open.';
 
 function heldResult(result) {
@@ -96,6 +97,7 @@ async function main({root, address, emit, lines, verifiedResult, input = process
   let rpcHeldConfirmed = false, homebrewAttempted = false, homebrewChild, homebrewTask;
   let homebrewRunning = false, homebrewSettled = false, homebrewStopTimer, homebrewFailurePublished = false;
   let homebrewApplication, awaitingGame = false, gameTitles = new Set(), cleanupBlocked = false;
+  let networkFailure, progressed = false;
   const safeEmit = (type, fields = {}) => {
     if (outputClosed) return;
     try {emit(type, fields);} catch (error) {
@@ -175,8 +177,10 @@ async function main({root, address, emit, lines, verifiedResult, input = process
     function output(line) {
       try {
         const clean = line.trim();
+        const bindFailure = networkBindFailure(clean, address);
+        if (bindFailure && !networkFailure) {networkFailure = bindFailure; finish('The selected Mac network address is unavailable.');}
         const start = /^V=START\((\d+(?:,\d+){4})\)$/.exec(clean);
-        if (start && !published && !finishing) {
+        if (start && !published && !finishing && !networkFailure) {
           const values = start[1].split(',').map(Number);
           if (values[0] === 39380 && values.slice(1).join('.') === address &&
               values.every(Number.isSafeInteger) && values.slice(1).every(value => value <= 255)) {
@@ -189,8 +193,9 @@ async function main({root, address, emit, lines, verifiedResult, input = process
         if (clean.startsWith('Run folder: ')) {
           const candidate = ownedRun(clean.slice('Run folder: '.length), runs);
           if (directory && directory !== candidate) throw Error('The host changed its run folder.');
-          directory = candidate; safeEmit('run-folder', {path: directory});
+          directory = candidate; progressed = true; safeEmit('run-folder', {path: directory});
         }
+        if (/^(?:Waiting for Switch 2 at |Connected\b|[1-4]\/4 |Sending: |MAC2JB_GUI |Keyboard enumerated\. Sending|Typing line |Sent line )/.test(clean)) progressed = true;
         if (clean.startsWith('Waiting for Switch 2 at '))
           safeEmit('host-stage', {stage: 'waiting', message: 'Waiting for the Switch to connect over the local network'});
         else if (clean.startsWith('Connected. Checking the application'))
@@ -391,6 +396,13 @@ async function main({root, address, emit, lines, verifiedResult, input = process
     input.removeListener('end', inputEnd); input.pause();
     let result;
     if (directory) {try {result = privateJSON(path.join(directory, 'result.json'));} catch (error) {fail(error.message);}}
+    if (networkFailure) {
+      const retrySafe = !published && !progressed && !ready && !failure;
+      const message = networkUnavailableMessage(address);
+      safeEmit(retrySafe ? 'network-unavailable' : 'failed', {...networkFailure, retrySafe,
+        message: retrySafe ? message : message + ' Pairing or console activity may have started. Stop the session and restart the console before retrying.'});
+      return 1;
+    }
     if (!failure && ready && outcome.code === 0 && !outcome.signal && !outcome.error &&
         verifiedResult(result) && result.rpc?.mode === 'held' && result.rpc?.state === 'closed' &&
         typeof result.completed === 'string' && !result.error &&

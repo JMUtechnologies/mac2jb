@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const {spawn} = require('node:child_process');
-const {validStart, verifiedResult, hidSettings} = require('./gui-host.cjs');
+const {validStart, verifiedResult, hidSettings, networkBindFailure} = require('./gui-host.cjs');
 function command(address = '192.0.2.1') {
   return 'V=START(' + [39380, ...address.split('.')].join(',') + ')';
 }
@@ -56,6 +56,38 @@ test('success requires independent FS verification, restoration and cleanup', ()
   assert.equal(verifiedResult({verified: true}), false);
   assert.equal(verifiedResult({verified: true, fs: {verified: true, restored: true, cleanup: {cleanedUp: false}}}), false);
   assert.equal(verifiedResult({verified: true, fs: {verified: true, restored: true, cleanup: {cleanedUp: true}}}), true);
+});
+test('Mac network diagnostics match only unavailable binding of the selected host endpoint', () => {
+  const line='Error: listen EADDRNOTAVAIL: address not available 192.0.2.1:39380';
+  assert.deepEqual(networkBindFailure(line,'192.0.2.1'),{address:'192.0.2.1',diagnostic:line});
+  for(const bad of [line.replace('EADDRNOTAVAIL','EADDRINUSE'),line.replace(':39380',':393800'),line.replace(':39380',':12345'),line.replace('192.0.2.1','192.0.2.11')])
+    assert.equal(networkBindFailure(bad,'192.0.2.1'),null,bad);
+});
+function bindFailureScript(prefix='',latePairing=false) {
+  const original='Error: listen EADDRNOTAVAIL: address not available 192.0.2.1:39380';
+  return `require('fs').appendFileSync('host-invocations.txt','once\\n');
+    process.stdout.write(${JSON.stringify(prefix+original+'\n    at Server.setupListenHandle (node:net:1:1)\n'+(latePairing?command()+'\n':''))});setInterval(()=>{},1000);`;
+}
+test('ordinary host bind failure preserves the cause, never publishes pairing and never retries', {timeout:5000}, async t => {
+  const root=fixture(t,undefined,bindFailureScript('',true));
+  const result=await run(root,['host','192.0.2.1']).done;
+  assert.equal(result.code,1,result.error);
+  const events=result.events.filter(event=>event.type==='network-unavailable');assert.equal(events.length,1);
+  assert.equal(events[0].retrySafe,true);assert.equal(events[0].address,'192.0.2.1');assert.match(events[0].message,/Refresh network addresses/);
+  assert.match(events[0].diagnostic,/listen EADDRNOTAVAIL.*192\.0\.2\.1:39380/);
+  assert.ok(result.events.some(event=>event.type==='log'&&event.message===events[0].diagnostic));
+  assert.equal(result.events.some(event=>['host-ready','verified','failed','typing'].includes(event.type)),false);
+  assert.equal(fs.existsSync(path.join(root,'vendor/ns2jb/runs/mac2jb-active-connect.txt')),false);
+  assert.equal(fs.readFileSync(path.join(root,'vendor/ns2jb/host-invocations.txt'),'utf8'),'once\n');
+});
+for(const prefix of [command()+'\n','Connected. Checking the application\n','1/4 native work\n','Sending: LOAD\n'])
+test('ordinary host cannot call a bind failure safe after '+prefix.trim(),{timeout:5000},async t=>{
+  const root=fixture(t,undefined,bindFailureScript(prefix));const result=await run(root,['host','192.0.2.1']).done;
+  assert.equal(result.code,1);assert.equal(result.events.some(event=>event.type==='network-unavailable'),false);
+  const failure=result.events.find(event=>event.type==='failed');assert.equal(failure.retrySafe,false);
+  assert.match(failure.message,/Mac network address.*Refresh network addresses/);assert.match(failure.message,/restart the console/);
+  assert.match(failure.diagnostic,/EADDRNOTAVAIL/);
+  assert.equal(fs.readFileSync(path.join(root,'vendor/ns2jb/host-invocations.txt'),'utf8'),'once\n');
 });
 test('timing defaults and independent range limits are validated', () => {
   assert.deepEqual(hidSettings([]), {delay: 50, enumerationTimeout: 4,

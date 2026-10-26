@@ -27,6 +27,9 @@ function fixture(t, options = {}) {
     'const options='+JSON.stringify(options)+';',
     "fs.writeFileSync('host-pid',String(process.pid));",
     "fs.writeFileSync('settings.json',JSON.stringify({args:process.argv.slice(2),arity:process.env.NS2_BASIC_ARITY,rpc:process.env.NS2_RPC_MODE,dump:process.env.NS2_FIRMWARE_DUMP_DIR}));",
+    "if(options.bindFailure){fs.appendFileSync('host-invocations.txt','once\\n');const evidence={pairing:'V=START(39380,127,0,0,1)\\n',connected:'Connected. Checking the application\\n',native:'1/4 native work\\n',typing:'Sending: LOAD\\n'}[options.bindEvidence]||'';",
+    "process.stdout.write(evidence+'Error: listen EADDRNOTAVAIL: address not available 127.0.0.1:39380\\n    at Server.setupListenHandle (node:net:1:1)\\n'+(options.latePairing?'V=START(39380,127,0,0,1)\\n':''));setInterval(()=>{},1000);",
+    "}else{",
     "const directory=path.join(__dirname,'runs/switch2-test');fs.mkdirSync(directory,{recursive:true});",
     'let result='+JSON.stringify(held())+';',
     'if(options.invalid)result.fs.restored=false;',
@@ -45,7 +48,8 @@ function fixture(t, options = {}) {
     "worker.once('message',()=>{save();console.log('V=START(39380,127,0,0,1)');console.log('Run folder: '+directory);",
     "if(options.delayReady)setTimeout(()=>console.log("+JSON.stringify(heldMessage)+"),options.delayReady);",
     "else console.log("+JSON.stringify(heldMessage)+");",
-    "if(options.signalDelayMs)setTimeout(()=>process.on('SIGTERM',onStop),options.signalDelayMs);});"
+    "if(options.signalDelayMs)setTimeout(()=>process.on('SIGTERM',onStop),options.signalDelayMs);});",
+    "}"
   ].join('\n'));
   fs.writeFileSync(path.join(host,'rpc.cjs'),[
     "exports.request=async(directory,request)=>{require('fs').appendFileSync(require('path').join(__dirname,'status-calls.txt'),JSON.stringify(request)+'\\n');",
@@ -112,6 +116,26 @@ test('held proof requires restoration, a live endpoint and deferred donor cleanu
     value=>{value.error='failed';},value=>{value.completed='done';},value=>{value.cleanupErrors=[{error:'failed'}];}]){
     const value=held();modify(value);assert.equal(heldResult(value),false);
   }
+});
+test('held adapter bind failure preserves the Mac error without pairing, HID or replay',{timeout:10000},async t=>{
+  const session=fixture(t,{bindFailure:true,latePairing:true});const result=await session.done;
+  assert.equal(result.code,1,result.output+result.error);const failures=session.events().filter(event=>event.type==='network-unavailable');
+  assert.equal(failures.length,1);assert.equal(failures[0].retrySafe,true);assert.equal(failures[0].address,'127.0.0.1');
+  assert.match(failures[0].diagnostic,/listen EADDRNOTAVAIL.*127\.0\.0\.1:39380/);assert.match(failures[0].message,/Refresh network addresses/);
+  assert.ok(session.events().some(event=>event.type==='log'&&event.message===failures[0].diagnostic));
+  assert.equal(session.events().some(event=>['host-ready','post-run-ready','verified','failed','typing'].includes(event.type)),false);
+  assert.equal(fs.existsSync(path.join(session.host,'runs/mac2jb-active-connect.txt')),false);
+  assert.equal(fs.existsSync(path.join(session.root,'homebrew-invocations.txt')),false);
+  assert.equal(fs.readFileSync(path.join(session.host,'host-invocations.txt'),'utf8'),'once\n');
+});
+for(const bindEvidence of ['pairing','connected','native','typing'])
+test('held adapter requires restart for bind failure after '+bindEvidence,{timeout:10000},async t=>{
+  const session=fixture(t,{bindFailure:true,bindEvidence});const result=await session.done;assert.equal(result.code,1,result.output+result.error);
+  assert.equal(session.events().some(event=>event.type==='network-unavailable'),false);
+  const failure=session.events().find(event=>event.type==='failed');assert.equal(failure.retrySafe,false);
+  assert.match(failure.message,/Mac network address.*Refresh network addresses/);assert.match(failure.message,/restart the console/);
+  assert.match(failure.diagnostic,/EADDRNOTAVAIL/);assert.equal(session.events().some(event=>event.type==='verified'),false);
+  assert.equal(fs.readFileSync(path.join(session.host,'host-invocations.txt'),'utf8'),'once\n');
 });
 test('choices stay deferred, inherited settings are fixed, status is read-only and choices run once',{timeout:10000},async t=>{
   const session=fixture(t);const ready=await session.wait('post-run-ready');

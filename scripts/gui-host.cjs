@@ -62,6 +62,14 @@ function verifiedResult(result) {
   return result?.verified === true && result?.fs?.verified === true &&
     result?.fs?.restored === true && result?.fs?.cleanup?.cleanedUp === true;
 }
+function networkBindFailure(line, address) {
+  const match = /\blisten\s+EADDRNOTAVAIL\b.*?\s(\d+(?:\.\d+){3}):(\d+)\b/.exec(line);
+  if (!match || match[1] !== address || match[2] !== '39380') return null;
+  return {address, diagnostic: line.trim().slice(0, 2048)};
+}
+function networkUnavailableMessage(address) {
+  return `The Mac network address ${address} is no longer available. Refresh network addresses, choose the current Mac LAN address, and start again.`;
+}
 function signalGroup(child, signal) {
   if (!child?.pid) return;
   try {process.kill(-child.pid, signal);} catch (error) {if (error.code !== 'ESRCH') throw error;}
@@ -90,11 +98,17 @@ async function host(address) {
     env: {...process.env, NS2_BASIC_ARITY: '5', NS2_RPC_MODE: '0'}
   });
   const child = current;
-  let published = false, directory, publicationError;
+  let published = false, directory, publicationError, networkFailure, networkTimer, progressed = false;
   function output(line) {
     try {
     const clean = line.trim();
-    if (validStart(clean, address) && !published && !stopping) {
+    const bindFailure = networkBindFailure(clean, address);
+    if (bindFailure && !networkFailure) {
+      networkFailure = bindFailure;
+      signalGroup(child, 'SIGTERM');
+      networkTimer = setTimeout(() => signalGroup(child, 'SIGKILL'), 2000); networkTimer.unref();
+    }
+    if (validStart(clean, address) && !published && !stopping && !networkFailure) {
       const temporary = active + '.' + process.pid + '.tmp';
       fs.writeFileSync(temporary, `${child.pid}\n${clean}\n`, {mode: 0o600, flag: 'wx'});
       // link provides no-replace publication, unlike rename on an existing file.
@@ -104,8 +118,9 @@ async function host(address) {
     }
     if (clean.startsWith('Run folder: ')) {
       const candidate = path.resolve(clean.slice('Run folder: '.length));
-      if (candidate.startsWith(runs + path.sep)) {directory = candidate; emit('run-folder', {path: candidate});}
+      if (candidate.startsWith(runs + path.sep)) {directory = candidate; progressed = true; emit('run-folder', {path: candidate});}
     }
+    if (/^(?:Waiting for Switch 2 at |Connected\b|[1-4]\/4 |Sending: |MAC2JB_GUI |Keyboard enumerated\. Sending|Typing line |Sent line )/.test(clean)) progressed = true;
     if (clean.startsWith('Waiting for Switch 2 at '))
       emit('host-stage', {stage: 'waiting', message: 'Waiting for the Switch to connect over the local network'});
     else if (clean.startsWith('Connected. Checking the application'))
@@ -124,6 +139,7 @@ async function host(address) {
     child.once('error', reject); child.once('close', (code, signal) => resolve({code, signal}));
   });
   clearTimeout(stopTimer);
+  clearTimeout(networkTimer);
   if (published) {
     try {if (fs.readFileSync(active, 'utf8').startsWith(`${child.pid}\n`)) fs.unlinkSync(active);} catch {}
   }
@@ -132,6 +148,13 @@ async function host(address) {
   signalGroup(child, 'SIGTERM');
   let result;
   if (directory) {try {result = JSON.parse(fs.readFileSync(path.join(directory, 'result.json'), 'utf8'));} catch {}}
+  if (networkFailure) {
+    const retrySafe = !published && !progressed && !publicationError;
+    const message = networkUnavailableMessage(address);
+    emit(retrySafe ? 'network-unavailable' : 'failed', {...networkFailure, retrySafe,
+      message: retrySafe ? message : message + ' Pairing or console activity may have started. Stop the session and restart the console before retrying.'});
+    return 1;
+  }
   if (stopping) {emit('cancelled', {message: 'Session stopped. Restart the console before another exploit attempt.'}); return 130;}
   if (code === 0 && !signal && !publicationError && verifiedResult(result)) {
     emit('verified', {message: 'FS execution verified; original instructions restored and scratch cleaned up.'}); return 0;
@@ -286,7 +309,7 @@ async function main(args = process.argv.slice(2)) {
   if (args[0] === 'hid' && args.length >= 3) return hid(args[1], args[2], hidSettings(args.slice(3)));
   throw Error('Usage: gui-host.cjs host IPv4 | hid bootstrap|commands auto|usb-drdN [delay-ms] [--demo]');
 }
-module.exports = {validStart, verifiedResult, hidSettings, lines, main};
+module.exports = {validStart, verifiedResult, hidSettings, lines, main, networkBindFailure, networkUnavailableMessage};
 if (require.main === module) main().then(code => {process.exitCode = code;}).catch(error => {
   signalGroup(current, 'SIGTERM'); emit('failed', {message: error.message}); process.exitCode = 1;
 });

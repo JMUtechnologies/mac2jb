@@ -23,7 +23,7 @@ defines the catalog, metadata and stream requests it uses.
    Restart the console, open SmileBASIC in Direct mode, choose Held RPC in
    mac2jb and start a fresh exploit session.
 3. Wait for 4/4 verification and confirmation that RPC is open. Under
-   Already got the ns2jb exploit running?, enter a supported addon's HTTP(S)
+   Homebrew requires Held RPC, enter a supported addon's HTTP(S)
    `manifest.json` URL, or sign in on the Mac to import your account addons and
    library. A manually entered URL overrides the account addon list. With the
    field empty and no account addons available, the player uses the bundled

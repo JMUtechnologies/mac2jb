@@ -9,7 +9,7 @@ struct SessionPostRunAction: Equatable {
 }
 
 enum SessionRunMode: String, CaseIterable, Identifiable {
-    case bootstrapOnly, exploitOnly, heldRPC, systemCodeDump
+    case heldRPC, bootstrapOnly, systemCodeDump, exploitOnly
     var id: String { rawValue }
     var number: Int { Self.allCases.firstIndex(of: self)! + 1 }
     var requiresHost: Bool { self != .bootstrapOnly }
@@ -25,7 +25,7 @@ enum SessionRunMode: String, CaseIterable, Identifiable {
         switch self {
         case .bootstrapOnly: return "Type bootstrap.bas into the editor, then save it as NS2."
         case .exploitOnly: return "Run the exploit and finish after verification."
-        case .heldRPC: return "Run the exploit, then keep RPC open."
+        case .heldRPC: return "Required for HBLauncher, OunceCake and Stremio. Run the exploit and keep the connection open."
         case .systemCodeDump: return "Run the exploit, save system code, then finish."
         }
     }

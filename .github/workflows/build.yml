@@ -115,6 +115,9 @@ jobs:
       - name: Verify start-screen session modes
         run: bash scripts/test-session-run-mode.sh
 
+      - name: Verify current Mac network selection and safe startup recovery
+        run: bash scripts/test-network-selection.sh
+
       - name: Verify full/demo save prompts and native load commands
         run: bash scripts/test-smilebasic-edition.sh
 

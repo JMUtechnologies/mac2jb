@@ -13,7 +13,7 @@ OunceCake does not supply system keys or decrypt files on the Mac.
    the demo checkbox if applicable.
 2. Restart the console, open SmileBASIC in Direct mode and start Held RPC
    in mac2jb. Wait for 4/4 verification and confirmation that RPC is open.
-3. Under Already got the ns2jb exploit running?, find OunceCake. Enter the
+3. Under Homebrew requires Held RPC, find OunceCake. Enter the
    console’s local address in Switch IP address and click Open game list.
 4. Under Choose a game, select the game you want to export, then click
    Start FTP.

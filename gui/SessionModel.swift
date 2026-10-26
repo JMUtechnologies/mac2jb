@@ -3,13 +3,6 @@ import Combine
 import Darwin
 import Foundation
 
-struct NetworkAddress: Identifiable, Hashable {
-    let address: String
-    let interface: String
-    var id: String { "\(interface):\(address)" }
-    var label: String { "\(address) · \(interface)" }
-}
-
 private struct GUIEvent: Decodable {
     let type: String
     let message: String?
@@ -30,6 +23,7 @@ private struct GUIEvent: Decodable {
     let port: Int?
     let ftpURL: String?
     let cleanupBlocked: Bool?
+    let retrySafe: Bool?
 }
 
 @MainActor final class SessionModel: ObservableObject {
@@ -47,9 +41,11 @@ private struct GUIEvent: Decodable {
     @Published var isEnumerating = false
     @Published var addresses: [NetworkAddress] = []
     @Published var selectedAddress = ""
+    @Published private(set) var activeAddress = ""
+    @Published private(set) var networkNotice: String?
     @Published var controller = "auto"
-    @Published private(set) var runMode: SessionRunMode = .exploitOnly
-    @Published private(set) var activeRunMode: SessionRunMode = .exploitOnly
+    @Published private(set) var runMode: SessionRunMode = .heldRPC
+    @Published private(set) var activeRunMode: SessionRunMode = .heldRPC
     @Published private(set) var usesDemo = UserDefaults.standard.bool(forKey: "smileBASICDemo")
     @Published private(set) var activeEdition: SmileBASICEdition = .full
     var selectedEdition: SmileBASICEdition { usesDemo ? .demo : .full }
@@ -100,6 +96,19 @@ private struct GUIEvent: Decodable {
     private var bootstrapStartedAt: Date?
     private var bootstrapTimer: Timer?
     private var hasEnumeratedSuccessfully = false
+    private let addressProvider: () -> [NetworkAddress]
+    private var networkRefreshTimer: Timer?
+    private var hostReadyReceived = false
+    private var hasHIDEvidence = false
+    private var preflightNetworkFailureHandled = false
+
+    init(addressProvider: @escaping () -> [NetworkAddress] = { NetworkSelection.localAddresses() }, runtime: BundledRuntime? = nil) {
+        self.addressProvider = addressProvider
+        self.runtime = runtime
+        workflowProgress.selectMode(fullInstall: false)
+    }
+
+    deinit { networkRefreshTimer?.invalidate() }
 
     var isBusy: Bool {
         [.preparing, .bootstrap, .hostStarting, .commands, .waitingForConsole,
@@ -148,6 +157,11 @@ private struct GUIEvent: Decodable {
     }
 
     func prepare() {
+        if networkRefreshTimer == nil {
+            networkRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.refreshNetworkAddressesIfIdle() }
+            }
+        }
         guard !preparing, runtime == nil else { return }
         preparing = true
         refreshChecks()
@@ -178,10 +192,7 @@ private struct GUIEvent: Decodable {
     }
 
     func refreshChecks() {
-        addresses = Self.localAddresses()
-        if !addresses.contains(where: { $0.address == selectedAddress }) {
-            selectedAddress = addresses.first?.address ?? ""
-        }
+        refreshNetworkAddressesIfIdle()
         driverInstalled = FileManager.default.fileExists(atPath: "/Library/Extensions/usbgadget.kext")
         driverStatus = driverInstalled ? "Driver installed; checking loaded status…" : "Driver not found in /Library/Extensions"
         Task {
@@ -206,16 +217,53 @@ private struct GUIEvent: Decodable {
         }
     }
 
+    func refreshNetworkAddressesIfIdle() {
+        guard [.preparing, .ready, .failed, .cancelled].contains(phase), !hasLiveWorkers, !driverSetupRunning else { return }
+        _ = refreshNetworkAddresses()
+    }
+
+    @discardableResult private func refreshNetworkAddresses() -> NetworkSelection.Refresh {
+        let previous = selectedAddress
+        let refresh = NetworkSelection.refresh(selected: previous, previous: addresses, available: addressProvider())
+        addresses = refresh.addresses; selectedAddress = refresh.selected
+        if refresh.changed, !previous.isEmpty {
+            networkNotice = "The Mac’s network address changed. Review the current address, confirm the Switch is ready, then press Start again."
+        }
+        return refresh
+    }
+
+    @discardableResult func handleNetworkUnavailable(_ message: String, retrySafe: Bool) -> Bool {
+        guard NetworkSelection.safePreflightFailure(retrySafe: retrySafe, hostStarting: phase == .hostStarting,
+            hostReady: hostReadyReceived, hasHIDWorker: hidProcess != nil, hasHIDEvidence: hasHIDEvidence,
+            postRunActive: postRun.isActive) else { return false }
+        preflightNetworkFailureHandled = true
+        _ = refreshNetworkAddresses()
+        networkNotice = message
+        endSessionActivity()
+        workflowProgress = WorkflowProgress(); workflowProgress.selectMode(fullInstall: fullInstall)
+        phase = .ready; status = "Review the Mac’s network address"
+        detail = message; error = nil; progress = nil; progressLabel = ""; isEnumerating = false
+        return true
+    }
+
     func start() {
         guard !driverSetupRunning else { return }
-        guard !isBusy, phase != .awaitingSave, hostProcess == nil, hidProcess == nil, let runtime else { return }
-        guard driverLoaded else { fail("Install/load the USB driver, complete any required restart, then refresh the driver check."); return }
+        guard !isBusy, phase != .awaitingSave, hostProcess == nil, hidProcess == nil else { return }
         if runMode.requiresHost {
-            guard Self.isIPv4(selectedAddress), addresses.contains(where: { $0.address == selectedAddress }) else {
-                fail("Choose a current LAN IPv4 address for this Mac, then refresh checks.")
+            let refresh = refreshNetworkAddresses()
+            guard !refresh.changed, Self.isIPv4(selectedAddress), !selectedAddress.isEmpty else {
+                networkNotice = refresh.changed
+                    ? "The Mac’s network address changed. Review the current address, confirm the Switch is ready, then press Start again."
+                    : "Connect this Mac to the Switch’s network, then choose a current Mac address before starting."
+                status = "Review the Mac’s network address"
+                detail = networkNotice ?? "Choose a current Mac network address."
+                phase = .ready; error = nil
+                workflowProgress = WorkflowProgress(); workflowProgress.selectMode(fullInstall: fullInstall)
                 return
             }
         }
+        guard let runtime else { return }
+        guard driverLoaded else { fail("Install/load the USB driver, complete any required restart, then refresh the driver check."); return }
         guard (1...2000).contains(keyDelayMs), (1...120).contains(enumerationTimeoutSeconds),
               [loadWaitMs, runWaitMs, removeWaitMs, effectiveLoadConfirmWaitMs].allSatisfy({ (0...120000).contains($0) }) else {
             fail("Use 1–2000 ms per key, 1–120 seconds for enumeration, and 0–120000 ms for each command wait.")
@@ -223,6 +271,9 @@ private struct GUIEvent: Decodable {
         }
         activeRunMode = runMode
         activeEdition = selectedEdition
+        activeAddress = activeRunMode.requiresHost ? selectedAddress : ""
+        hostReadyReceived = false; hasHIDEvidence = false; preflightNetworkFailureHandled = false
+        networkNotice = nil
         workflowProgress.begin(fullInstall: activeRunMode == .bootstrapOnly)
         // Keep the Mac awake through typing, the save checkpoint, and host
         // verification. This assertion is scoped to this session only.
@@ -239,7 +290,7 @@ private struct GUIEvent: Decodable {
         resetBootstrapTiming()
         hostStageLabel = "Waiting for the Switch to connect over the local network"
         hostStageProgress = nil
-        append("\(AppBuildIdentity.diagnosticLabel); mode=\(activeRunMode.rawValue); edition=\(activeEdition.rawValue); controller=\(controller); address=\(selectedAddress); keyDelayMs=\(keyDelayMs); enumerationTimeoutSeconds=\(enumerationTimeoutSeconds); loadConfirmWaitMs=\(effectiveLoadConfirmWaitMs); loadWaitMs=\(loadWaitMs); runWaitMs=\(runWaitMs); removeWaitMs=\(removeWaitMs). Starting \(activeRunMode.title).")
+        append("\(AppBuildIdentity.diagnosticLabel); mode=\(activeRunMode.rawValue); edition=\(activeEdition.rawValue); controller=\(controller); address=\(activeAddress); keyDelayMs=\(keyDelayMs); enumerationTimeoutSeconds=\(enumerationTimeoutSeconds); loadConfirmWaitMs=\(effectiveLoadConfirmWaitMs); loadWaitMs=\(loadWaitMs); runWaitMs=\(runWaitMs); removeWaitMs=\(removeWaitMs). Starting \(activeRunMode.title).")
         if activeRunMode == .bootstrapOnly { startHID("bootstrap", root: runtime.root) }
         else { startHost(root: runtime.root) }
     }
@@ -428,14 +479,14 @@ private struct GUIEvent: Decodable {
     func recordDiagnostic(_ message: String) { append(message) }
 
     private func startHost(root: URL) {
-        guard let arguments = activeRunMode.hostArguments(address: selectedAddress) else {
+        guard let arguments = activeRunMode.hostArguments(address: activeAddress) else {
             fail("Choose an exploit mode to start a host session.")
             return
         }
         phase = .hostStarting; status = "Starting a fresh ns2jb host"
         detail = "The Mac and Switch must be on the same local network. Allow incoming connections if macOS asks."
         progress = nil
-        progressLabel = "Starting the host on \(selectedAddress)"; isEnumerating = false
+        progressLabel = "Starting the host on \(activeAddress)"; isEnumerating = false
         launch(arguments: arguments, role: "host", root: root)
     }
 
@@ -522,7 +573,12 @@ private struct GUIEvent: Decodable {
         switch event.type {
         case "host-ready":
             guard role == "host", phase == .hostStarting, let runtime else { return }
+            hostReadyReceived = true
             startHID("commands", root: runtime.root)
+        case "network-unavailable":
+            guard role == "host" else { return }
+            let message = event.message ?? "This Mac’s selected network address is no longer available. Review the current address before starting again."
+            if !handleNetworkUnavailable(message, retrySafe: event.retrySafe == true) { fail(message) }
         case "run-folder":
             if let path = event.path { runFolder = URL(fileURLWithPath: path) }
         case "post-run-ready":
@@ -615,6 +671,7 @@ private struct GUIEvent: Decodable {
                 }
             }
         case "typing":
+            if role == "hid" { hasHIDEvidence = true }
             isEnumerating = false; progress = 0
             if phase == .bootstrap {
                 hasEnumeratedSuccessfully = true
@@ -711,6 +768,7 @@ private struct GUIEvent: Decodable {
         }
         if role == "hid", hidProcess === process { hidProcess = nil }
         if !diagnostic.isEmpty, let text = String(data: diagnostic, encoding: .utf8) { append(text, channel: role == "host" ? .host : .usb) }
+        if role == "host", preflightNetworkFailureHandled { endSessionActivity(); return }
         guard phase != .cancelled, phase != .failed, phase != .verified else { return }
         if process.terminationStatus != 0 {
             fail("The \(role == "host" ? "host" : "USB transfer") stopped unexpectedly. Inspect the Switch before retrying.")
@@ -832,34 +890,7 @@ private struct GUIEvent: Decodable {
     }
 
     nonisolated static func isIPv4(_ address: String) -> Bool {
-        var value = in_addr()
-        return address.withCString { inet_pton(AF_INET, $0, &value) } == 1
-    }
-
-    nonisolated private static func localAddresses() -> [NetworkAddress] {
-        var first: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&first) == 0, let initial = first else { return [] }
-        defer { freeifaddrs(first) }
-        var values: [NetworkAddress] = []
-        var item: UnsafeMutablePointer<ifaddrs>? = initial
-        while let current = item {
-            defer { item = current.pointee.ifa_next }
-            let info = current.pointee
-            guard let address = info.ifa_addr, address.pointee.sa_family == UInt8(AF_INET),
-                  (info.ifa_flags & UInt32(IFF_UP)) != 0, (info.ifa_flags & UInt32(IFF_LOOPBACK)) == 0 else { continue }
-            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            if getnameinfo(address, socklen_t(address.pointee.sa_len), &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 {
-                let string = String(cString: buffer)
-                if !string.hasPrefix("169.254.") { values.append(NetworkAddress(address: string, interface: String(cString: info.ifa_name))) }
-            }
-        }
-        // Physical interfaces precede virtual/VPN interfaces, without guessing
-        // that the first address necessarily reaches the user's console.
-        return values.sorted { a, b in
-            let physicalA = a.interface.hasPrefix("en"), physicalB = b.interface.hasPrefix("en")
-            if physicalA != physicalB { return physicalA }
-            return a.label < b.label
-        }
+        NetworkSelection.isIPv4(address)
     }
 
     nonisolated private static func capture(_ executable: String, _ arguments: [String]) -> (Int32, String) {

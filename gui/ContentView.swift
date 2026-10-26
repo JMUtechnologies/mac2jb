@@ -76,6 +76,9 @@ struct ContentView: View {
             model.accountProgressHandler = nil
             account.cancelSignIn()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refreshNetworkAddressesIfIdle()
+        }
         .onChange(of: model.phase) { _, phase in
             readyConfirmed = false
             savedConfirmed = false
@@ -89,6 +92,7 @@ struct ContentView: View {
         }
         .onChange(of: model.runMode) { _, _ in readyConfirmed = false }
         .onChange(of: model.usesDemo) { _, _ in readyConfirmed = false }
+        .onChange(of: model.selectedAddress) { _, _ in if canConfigure { readyConfirmed = false } }
         .onChange(of: updater.state) { _, state in if state == .failed { showUpdateFailure = true } }
         .alert("The session needs attention", isPresented: $showFailure) {
             if model.diagnosticLogURL != nil {
@@ -224,6 +228,9 @@ struct ContentView: View {
 
     private var setup: some View {
         VStack(spacing: 18) {
+            if let notice = model.networkNotice {
+                note(notice, icon: "network", color: .orange)
+            }
             if model.phase == .failed || model.phase == .cancelled {
                 note(model.detail, icon: "exclamationmark.circle", color: .orange)
                 if model.hasLiveWorkers {
@@ -237,6 +244,12 @@ struct ContentView: View {
             panel {
                 VStack(alignment: .leading, spacing: 16) {
                     eyebrow("01 / STARTING POINT")
+                    modeCard(.heldRPC)
+                    Text(model.usesDemo
+                         ? "Requires the bootstrap already saved as TXT:NS2 using SAVEV. Use Type bootstrap only below if you still need to save it."
+                         : "Requires the bootstrap already saved in slot 0 as NS2. Use Type bootstrap only below if you still need to save it.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Divider()
                     modeCard(.bootstrapOnly)
                     Toggle("I’m using the SmileBASIC demo", isOn: Binding(
                         get: { model.usesDemo }, set: { model.setUsesDemo($0) }))
@@ -246,14 +259,11 @@ struct ContentView: View {
                          : "Uses the full version’s SAVE and LOAD commands.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                     Divider()
-                    Text(model.usesDemo ? "Already saved your bootstrap as TXT:NS2 using SAVEV?" : "Already have bootstrap.bas saved to slot 0 as NS2?")
-                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
                     HStack(alignment: .top, spacing: 10) {
-                        modeCard(.exploitOnly)
-                        modeCard(.heldRPC)
                         modeCard(.systemCodeDump)
+                        modeCard(.exploitOnly)
                     }
-                    Text("For any of these three runs, restart the Switch, open SmileBASIC and enter Direct mode. Each starts a fresh exploit using your saved NS2.")
+                    Text("For Held RPC, System-code dump and NS2JB exploit only, restart the Switch, open SmileBASIC and enter Direct mode. Each uses your saved NS2.")
                         .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     homebrewSection
                     Divider()
@@ -363,7 +373,7 @@ struct ContentView: View {
                         .background(teal.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
                     VStack(alignment: .leading, spacing: 6) {
                         Text(model.status).font(.system(size: 17, weight: .semibold)).foregroundStyle(ink)
-                        Text(model.activeRunMode == .bootstrapOnly ? "Bootstrap only · \(model.controller == "auto" ? "Automatic controller" : model.controller)" : model.selectedAddress.isEmpty ? "Preparing the embedded runtime" : "\(model.selectedAddress) · \(model.controller == "auto" ? "Automatic controller" : model.controller)")
+                        Text(model.activeRunMode == .bootstrapOnly ? "Bootstrap only · \(model.controller == "auto" ? "Automatic controller" : model.controller)" : model.activeAddress.isEmpty ? "Preparing the embedded runtime" : "\(model.activeAddress) · \(model.controller == "auto" ? "Automatic controller" : model.controller)")
                             .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     }
                 }
@@ -436,8 +446,10 @@ struct ContentView: View {
 
     private var homebrewSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Already got the ns2jb exploit running?")
+            Text("Homebrew requires Held RPC")
                 .font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+            Text("Select Held RPC above and wait for 4/4 verification in this app before launching any of these tools.")
+                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "gamecontroller").font(.system(size: 22)).foregroundStyle(teal)
                 VStack(alignment: .leading, spacing: 5) {
@@ -538,7 +550,7 @@ struct ContentView: View {
                 }
                 HStack(spacing: 16) {
                     Text("Address: " + endpoint.host).textSelection(.enabled)
-                    Text("Port \(endpoint.port)")
+                    Text("Port " + String(endpoint.port))
                     Button("Copy FTP address") { model.copyOunceCakeAddress() }
                 }.font(.system(size: 11, design: .monospaced))
                 Text("No username or password · Binary transfer mode")

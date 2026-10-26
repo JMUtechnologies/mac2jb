@@ -37,19 +37,19 @@ Select the Mac’s IPv4 address on the same network as the Switch. The GUI keeps
 
 ### Choose a mode before starting
 
-SmileBASIC edition: I’m using the SmileBASIC demo appears above the
-bootstrap/exploit choices. This checkbox is off by
+SmileBASIC edition: I’m using the SmileBASIC demo appears immediately below
+Type bootstrap only. This checkbox is off by
 default and remembered between launches. Select it for the demo; leave it
 unchecked for the full game. The selected edition stays fixed during a run.
 
-The start screen separates Type bootstrap only from the three choices for an `NS2` already saved in slot 0. Those three saved-bootstrap choices appear side by side. Restart the console before every run, then prepare SmileBASIC for the selected choice:
+Held RPC is the first option and selected by default because all homebrew tools require it. Type bootstrap only comes next for initial setup, followed by System-code dump and NS2JB exploit only. Restart the console before every exploit run, then prepare SmileBASIC for the selected choice:
 
 | Choice | What happens |
 | --- | --- |
+| Held RPC | Loads the saved `NS2`, sends RUN, REMOVE and START, then keeps the verified connection open for homebrew. Keep mac2jb and SmileBASIC open. Choose Finish session when done. |
 | Type bootstrap only | Types the exact fork bootstrap into an empty SmileBASIC program editor. When typing finishes, manually save it using the commands for your selected edition, confirm the save prompt and return to the start screen. It does not save automatically, start a host or run the exploit. |
-| NS2JB exploit only | Loads the saved new `NS2`, sends RUN, REMOVE, and this host's START command, verifies execution and restoration, then releases resources and finishes. It does not hold RPC open. |
-| Held RPC | Runs the same saved-bootstrap exploit sequence, then keeps the verified RPC and FS endpoint available. Keep mac2jb and SmileBASIC open. Use Check RPC or copy the status command as needed, then choose Finish session to release resources and verify cleanup. |
 | System-code dump | Runs the same saved-bootstrap exploit sequence, captures accessible installed system-program `main` and `main.npdm` files with an inventory and hashes, then releases resources and finishes automatically. Choose Open dump folder after completion. |
+| NS2JB exploit only | Loads the saved new `NS2`, sends RUN, REMOVE, and this host's START command, verifies execution and restoration, then releases resources and finishes. It does not hold RPC open and cannot launch homebrew. |
 
 For Type bootstrap only, open SmileBASIC → Make a Program with an empty
 editor before starting. Allow approximately 7–10 minutes at the default typing
@@ -95,7 +95,7 @@ The GUI cannot inspect the Switch screen, verify a saved program, operate macOS 
 ## Homebrew
 
 Start a fresh Held RPC session using the new saved `NS2`. Once 4/4 succeeds,
-choose Launch HBLauncher under Already got the ns2jb exploit running?
+choose Launch HBLauncher under Homebrew requires Held RPC
 to start the bundled HBLauncher v0.2.0 through that same live connection. Keep mac2jb and SmileBASIC open. The app supplies the launcher,
 apps, runtime, and companion tools; no Pico or second bootstrap is needed.
 HBLauncher can be launched only once in each held session.

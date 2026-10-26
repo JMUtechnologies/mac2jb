@@ -18,8 +18,9 @@ session. The Mac and SmileBASIC must stay open throughout use.
    Ethernet is likely required for the Switch 2; Wi-Fi has not yet been verified
    with this setup. Use Ethernet until Wi-Fi support is confirmed.
 3. Select the Mac address reachable by the console, start the run, and wait for
-   4/4 verification and confirmation that RPC is open. Under Already got
-   the ns2jb exploit running?, choose HBLauncher, OunceCake or Stremio.
+   4/4 verification and confirmation that RPC is open. Under Homebrew requires
+   Held RPC, choose HBLauncher, OunceCake or Stremio. NS2JB exploit only closes
+   RPC and cannot launch these tools.
 
 These choices reuse this app's verified live session. No Pico, second bootstrap
 or second `REMOVE` is needed. See the [GUI guide](GUI-DEMO.md) for driver setup,

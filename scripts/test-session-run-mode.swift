@@ -4,7 +4,9 @@ import Foundation
     static func main() throws {
         let address = "192.0.2.1"
         precondition(SessionRunMode.allCases.count == 4)
+        precondition(SessionRunMode.allCases == [.heldRPC, .bootstrapOnly, .systemCodeDump, .exploitOnly])
         precondition(SessionRunMode.allCases.map(\.number) == [1, 2, 3, 4])
+        precondition(SessionRunMode.heldRPC.caption.contains("Required for HBLauncher, OunceCake and Stremio"))
 
         var bootstrap = WorkflowProgress()
         bootstrap.begin(fullInstall: true)
