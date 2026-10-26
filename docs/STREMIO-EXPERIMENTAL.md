@@ -14,24 +14,24 @@ defines the catalog, metadata and stream requests it uses.
 
 ## Try it
 
-1. Install **Stremio on the Mac** at `/Applications/Stremio.app`. The player
+1. Install Stremio on the Mac at `/Applications/Stremio.app`. The player
    uses that app's `ffmpeg` and `ffprobe` executables; these executables are not
    redistributed inside mac2jb. mac2jb does not install or update Stremio.
-2. Use the fork's current five-argument bootstrap, saved in **slot 0 as NS2**.
-   For a demo-capable GUI build, select **I’m using the SmileBASIC demo** if
+2. Use the fork's current five-argument bootstrap, saved in slot 0 as NS2.
+   For a demo-capable GUI build, select I’m using the SmileBASIC demo if
    applicable and follow the [demo save/load instructions](../README.md#smilebasic-full-game-versus-demo).
-   Restart the console, open SmileBASIC in Direct mode, choose **Held RPC** in
+   Restart the console, open SmileBASIC in Direct mode, choose Held RPC in
    mac2jb and start a fresh exploit session.
-3. Wait for **4/4 verification** and confirmation that RPC is open. Under
-   **Already got the ns2jb exploit running?**, enter a supported addon's HTTP(S)
+3. Wait for 4/4 verification and confirmation that RPC is open. Under
+   Already got the ns2jb exploit running?, enter a supported addon's HTTP(S)
    `manifest.json` URL, or sign in on the Mac to import your account addons and
    library. A manually entered URL overrides the account addon list. With the
    field empty and no account addons available, the player uses the bundled
    30-second Big Buck Bunny playback sample.
-4. Choose **Launch Stremio**. The player uses this app's current verified held
+4. Choose Launch Stremio. The player uses this app's current verified held
    session. It does not retype the bootstrap or resend LOAD, RUN or REMOVE.
    Select a title, an episode when applicable, and a direct HTTP(S)/HLS source.
-5. Use **Finish session** in mac2jb when finished. Wait for cleanup and restart
+5. Use Finish session in mac2jb when finished. Wait for cleanup and restart
    the console before another exploit session. Closing mac2jb cancels in-flight
    account requests.
 
@@ -43,19 +43,19 @@ attach this player. It cannot attach to an arbitrary external RPC session.
 
 | Screen | Controls |
 | --- | --- |
-| Catalog, details, episodes or sources | D-pad up/down selects; **A** opens; **B** goes back |
-| Browsing | **X** refreshes the current list; **Y** moves to the next catalog |
-| Playback | **A** pauses/resumes; left/right seeks backward/forward 10 seconds |
-| Playback | Up/down changes volume by 5 percentage points; **B** stops and returns to sources |
+| Catalog, details, episodes or sources | D-pad up/down selects; A opens; B goes back |
+| Browsing | X refreshes the current list; Y moves to the next catalog |
+| Playback | A pauses/resumes; left/right seeks backward/forward 10 seconds |
+| Playback | Up/down changes volume by 5 percentage points; B stops and returns to sources |
 
 The menu shows at most eight rows at once and scrolls the selected item into
 view. Unsupported source types and addon/network errors are shown explicitly.
-The Mac activity view and **Open homebrew logs** provide further diagnostics.
+The Mac activity view and Open homebrew logs provide further diagnostics.
 
 ## Account library and resume
 
-**Live account sign-in, library/resume and watch-progress sync have not yet been
-independently verified.** They are included as experimental account features;
+Live account sign-in, library/resume and watch-progress sync have not yet been
+independently verified. They are included as experimental account features;
 confirmed playback does not establish that cloud updates were saved.
 
 Optional sign-in opens Stremio's account-link page in the Mac browser. The
@@ -65,8 +65,8 @@ Addon URLs may contain private provider configuration, so keep local session
 files private. The player accepts up to 32 compatible account addons and a
 browsing snapshot of up to 500 library records; the Mac reports import limits.
 
-**Continue watching** and **My Library** appear before addon catalogs when
-library records are available. Open a saved item and choose **Resume** to use
+Continue watching and My Library appear before addon catalogs when
+library records are available. Open a saved item and choose Resume to use
 its recorded movie or episode and position. Selecting a different episode
 starts that episode at the beginning. Source lookup still requires an imported
 addon that supports the item's ID and returns supported media.
@@ -86,12 +86,12 @@ formats, including millisecond cloud offsets and per-episode watched state.
 
 ## Current limits
 
-- Playback targets **320×180 at 15 fps**. Frames use BC1 compression for transfer
+- Playback targets 320×180 at 15 fps. Frames use BC1 compression for transfer
   to the GPU; audio uses continuous 48 kHz stereo signed 16-bit PCM. Startup and
   playback are confirmed, but throughput, frame timing and audio synchronization
   need broader testing. These settings are targets, not a measured performance
   guarantee for every source or network.
-- Only direct **HTTP(S) media URLs and HLS** are supported. Torrent/info-hash,
+- Only direct HTTP(S) media URLs and HLS are supported. Torrent/info-hash,
   YouTube-ID and external-browser sources are reported as unsupported. Some
   providers return only these source types.
 - Subtitle selection and torrent streaming are not included. Imported account

@@ -233,6 +233,7 @@ struct ContentView: View {
             panel {
                 VStack(alignment: .leading, spacing: 16) {
                     eyebrow("01 / STARTING POINT")
+                    modeCard(.bootstrapOnly)
                     Toggle("I’m using the SmileBASIC demo", isOn: Binding(
                         get: { model.usesDemo }, set: { model.setUsesDemo($0) }))
                         .toggleStyle(.checkbox).font(.system(size: 12, weight: .medium))
@@ -240,7 +241,6 @@ struct ContentView: View {
                          ? "Uses SAVEV to save the bootstrap and LOADV to restore it. This choice is remembered for later runs."
                          : "Uses the full version’s SAVE and LOAD commands.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
-                    modeCard(.bootstrapOnly)
                     Divider()
                     Text(model.usesDemo ? "Already saved your bootstrap as TXT:NS2 using SAVEV?" : "Already have bootstrap.bas saved to slot 0 as NS2?")
                         .font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)

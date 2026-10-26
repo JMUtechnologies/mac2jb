@@ -88,7 +88,7 @@ The root MIT license applies to mac2jb; it does not relicense third-party code.
 
 - libusbd: Max Thomas / ShinyQuagsire; MIT notice preserved, together with
   Apple-derived APSL 2.0 source notices and full license text. Existing dated
-  build/controller-selection changes remain. A downstream **2026-10-26** patch
+  build/controller-selection changes remain. A downstream 2026-10-26 patch
   to `src/plat/macos/alt_IOUSBDeviceControllerLib.c` gives the controller wrapper
   an independent retained IOKit service reference, balances its release, and
   handles null/cleared wrappers. The upstream origin and pin in `upstream.lock`
@@ -125,9 +125,9 @@ The root MIT license applies to mac2jb; it does not relicense third-party code.
   The app uses the arm64 slice of the locally installed official
   Node distribution, whose linked libraries must all be supplied by macOS.
 
-HBLauncher companion tools are bundled for offline use: Python **3.13.17**
-from the standalone **20261021** distribution, Pillow **13.0.0**,
-SPIRV-Tools **2026.4**, and DejaVu Sans **2.37**. Their upstream licenses and
+HBLauncher companion tools are bundled for offline use: Python 3.13.17
+from the standalone 20261021 distribution, Pillow 13.0.0,
+SPIRV-Tools 2026.4, and DejaVu Sans 2.37. Their upstream licenses and
 third-party notices are retained with the packaged runtime. The mac2jb root MIT
 license does not relicense these dependencies.
 

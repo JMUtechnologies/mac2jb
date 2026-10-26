@@ -20,7 +20,7 @@ may reject the unsigned copy. mac2jb has not verified installing and then
 re-enabling SIP, including behavior with a cached AuxKC. Compatible partial/custom settings
 are a separate case. See [Apple's kernel-extension policy](https://support.apple.com/en-ca/guide/security/sec8e454101b/web).
 
-The driver is upstream work by **Max Thomas / ShinyQuagsire**, with the local build and unsigned-copy testing performed by the mac2jb maintainer.
+The driver is upstream work by Max Thomas / ShinyQuagsire, with the local build and unsigned-copy testing performed by the mac2jb maintainer.
 
 From the complete source checkout: `bash scripts/install-driver.sh`. To validate the bundled files without installing or loading: `bash scripts/install-driver.sh --verify`.
 
