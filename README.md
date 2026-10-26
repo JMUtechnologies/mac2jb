@@ -103,11 +103,11 @@ bundled [kurumuz version](assets/bootstrap.bas), which has five-argument
 
 1. Connect the Mac and Switch with the USB-C data cable.
 2. In SmileBASIC, open Make a Program with an empty editor.
-3. In mac2jb, select Type bootstrap only, the second option. If using the demo,
+3. In mac2jb, select Type bootstrap only, the first option. If using the demo,
    tick I’m using the SmileBASIC demo immediately below it. Leave it off for
    the full game; the app remembers your choice.
 4. Start typing and wait until it finishes, usually about 7–10 minutes.
-5. Enter Direct mode and save the program with the commands below. mac2jb
+5. Press X to return to Direct mode and save the program with the commands below. mac2jb
    shows a prompt but does not save it for you.
 6. After saving, confirm the prompt in mac2jb and return to the start screen.
 
@@ -115,7 +115,7 @@ bundled [kurumuz version](assets/bootstrap.bas), which has five-argument
 
 ### Full game
 
-With the bootstrap in slot 0, enter Direct mode and save it with:
+With the bootstrap in slot 0, press X to return to Direct mode and save it with:
 
 ```basic
 SAVE "NS2"
@@ -126,7 +126,7 @@ for you when you start a GUI exploit run.
 
 ### SmileBASIC demo
 
-In Direct mode, enter these two save commands in order:
+Press X to return to Direct mode, then enter these two save commands in order:
 
 ```basic
 PRGEDIT 0
@@ -146,21 +146,23 @@ the full-game route; demo automation uses the GUI checkbox.
 
 ## Run the GUI
 
-1. Restart the Switch, open SmileBASIC and enter Direct mode.
-2. Select Held RPC in mac2jb. It is the first option and selected by default.
+1. Restart the Switch, open SmileBASIC → Make a Program and enter Direct mode.
+2. Select Held RPC in mac2jb. It is the second option and selected by default.
    This keeps the connection open for all the homebrew tools below.
-3. Select the Mac's IPv4 address on the network shared with the Switch. This
-   picker is for the Mac, not the Switch. Refresh and reselect if it changes.
+3. In Ready Check, select the Mac's IPv4 address on the network shared with
+   the Switch. This picker is for the Mac, not the Switch. Refresh and reselect
+   if it changes. USB controller and timing settings are also in Ready Check.
 4. Check the SmileBASIC demo checkbox matches your edition, then start the run.
 5. Keep SmileBASIC focused and the cable connected. Wait for 4/4 verification
    and confirmation that RPC is open before opening a homebrew tool.
 
-The four choices appear in this order:
+The homebrew list appears directly below Held RPC. The optional tasks are
+below that list. The four choices are numbered in this order:
 
 | Choice | Use it for |
 | --- | --- |
-| Held RPC | Run the exploit and keep the connection open for homebrew. |
 | Type bootstrap only | Type the program, then save it manually. |
+| Held RPC | Run the exploit and keep the connection open for homebrew. |
 | System-code dump | Save accessible system-program code, then finish automatically. |
 | NS2JB exploit only | Verify the exploit and finish. It cannot launch homebrew. |
 
@@ -170,7 +172,7 @@ again each time; a saved bootstrap does not preserve a live connection.
 ## Homebrew
 
 Every tool here requires a fresh Held RPC run with 4/4 verification. Use the
-Homebrew requires Held RPC section in mac2jb. Keep mac2jb and SmileBASIC open,
+Homebrew requires Held RPC section directly below Held RPC. Keep mac2jb and SmileBASIC open,
 and choose only one tool per session. No Pico is needed.
 
 - HBLauncher v0.2.0: click Launch HBLauncher to open its GPU app menu.

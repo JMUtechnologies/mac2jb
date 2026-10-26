@@ -66,8 +66,8 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         let beforeBootstrap = reads
         model.start()
         check(reads == beforeBootstrap && !model.hasLiveWorkers, "bootstrap-only does not require a network address")
-        check(SessionRunMode.allCases == [.heldRPC, .bootstrapOnly, .systemCodeDump, .exploitOnly] &&
-              SessionRunMode.allCases.map(\.number) == [1,2,3,4], "visible mode contract has Held RPC first and exploit-only last")
+        check(SessionRunMode.allCases == [.bootstrapOnly, .heldRPC, .systemCodeDump, .exploitOnly] &&
+              SessionRunMode.allCases.map(\.number) == [1,2,3,4], "visible mode contract has bootstrap first and exploit-only last")
 
         // Exercise the real Process/output/exit callbacks with an inert fake
         // host. It cannot run the app's JavaScript or a USB/RPC helper.

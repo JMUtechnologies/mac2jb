@@ -12,14 +12,17 @@ session. The Mac and SmileBASIC must stay open throughout use.
    If using the SmileBASIC demo, enable I’m using the SmileBASIC demo and use
    the [demo save/load commands](../README.md#smilebasic-full-game-versus-demo).
    Saving the bootstrap does not preserve the exploit or a live RPC session.
-2. Restart the console, open SmileBASIC in Direct mode, and choose
-   Held RPC in mac2jb. The supported combination is Switch 2 system software
+2. Restart the console, open SmileBASIC → Make a Program and enter Direct
+   mode. Choose Held RPC, the second option in mac2jb; it is selected by default.
+   The supported combination is Switch 2 system software
    23.0.1, SmileBASIC 4.4.9, and more than 20 MiB free in its save.
    Ethernet is likely required for the Switch 2; Wi-Fi has not yet been verified
    with this setup. Use Ethernet until Wi-Fi support is confirmed.
-3. Select the Mac address reachable by the console, start the run, and wait for
+3. In Ready Check, select the Mac address reachable by the console, start the
+   run, and wait for
    4/4 verification and confirmation that RPC is open. Under Homebrew requires
-   Held RPC, choose HBLauncher, OunceCake or Stremio. NS2JB exploit only closes
+   Held RPC directly below the Held RPC option, choose HBLauncher, OunceCake or
+   Stremio. NS2JB exploit only closes
    RPC and cannot launch these tools.
 
 These choices reuse this app's verified live session. No Pico, second bootstrap

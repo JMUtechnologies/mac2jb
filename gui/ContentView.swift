@@ -244,12 +244,6 @@ struct ContentView: View {
             panel {
                 VStack(alignment: .leading, spacing: 16) {
                     eyebrow("01 / STARTING POINT")
-                    modeCard(.heldRPC)
-                    Text(model.usesDemo
-                         ? "Requires the bootstrap already saved as TXT:NS2 using SAVEV. Use Type bootstrap only below if you still need to save it."
-                         : "Requires the bootstrap already saved in slot 0 as NS2. Use Type bootstrap only below if you still need to save it.")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    Divider()
                     modeCard(.bootstrapOnly)
                     Toggle("I’m using the SmileBASIC demo", isOn: Binding(
                         get: { model.usesDemo }, set: { model.setUsesDemo($0) }))
@@ -259,65 +253,20 @@ struct ContentView: View {
                          : "Uses the full version’s SAVE and LOAD commands.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                     Divider()
+                    modeCard(.heldRPC)
+                    Text(model.usesDemo
+                         ? "Requires the bootstrap already saved as TXT:NS2 using SAVEV. Use Type bootstrap only above if you still need to save it."
+                         : "Requires the bootstrap already saved in slot 0 as NS2. Use Type bootstrap only above if you still need to save it.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    homebrewSection
+                    Divider()
+                    Text("Optional tasks").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
                     HStack(alignment: .top, spacing: 10) {
                         modeCard(.systemCodeDump)
                         modeCard(.exploitOnly)
                     }
-                    Text("For Held RPC, System-code dump and NS2JB exploit only, restart the Switch, open SmileBASIC and enter Direct mode. Each uses your saved NS2.")
+                    Text("For Held RPC, System-code dump and NS2JB exploit only, restart the Switch, open SmileBASIC and choose Make a Program. Each uses your saved NS2.")
                         .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    homebrewSection
-                    Divider()
-                    if model.runMode.requiresHost { HStack(alignment: .top, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Mac address on the Switch’s network").font(.system(size: 12, weight: .semibold))
-                            if model.addresses.isEmpty {
-                                Text("Connect this Mac to your local network, then refresh.").font(.system(size: 11)).foregroundStyle(.secondary)
-                            } else {
-                                Picker("Network address", selection: $model.selectedAddress) {
-                                    ForEach(model.addresses) { address in
-                                        Text(address.label).tag(address.address)
-                                    }
-                                }.labelsHidden().frame(maxWidth: .infinity)
-                            }
-                        }
-                        Button { model.refreshChecks() } label: { Image(systemName: "arrow.clockwise") }
-                            .help("Refresh network and driver checks").padding(.top, 22)
-                    } }
-                    DisclosureGroup("USB controller & timing options") {
-                        VStack(alignment: .leading, spacing: 14) {
-                            Picker("Controller", selection: $model.controller) {
-                                Text("Automatic · 0, 1, 3").tag("auto")
-                                ForEach(0..<16) { Text("usb-drd\($0)").tag("usb-drd\($0)") }
-                            }
-                            Divider()
-                            timingField("Delay per key", units: "ms", value: $model.keyDelayMs, range: 1...2000)
-                            timingField("Enumeration timeout per controller", units: "s", value: $model.enumerationTimeoutSeconds, range: 1...120)
-                            Divider()
-                            Text("Post-bootstrap waits").font(.system(size: 11, weight: .semibold)).foregroundStyle(ink)
-                            if !model.usesDemo {
-                                timingField("Before confirming LOAD (YES)", units: "ms", value: $model.loadConfirmWaitMs, range: 0...120000)
-                            }
-                            timingField("After LOAD → before RUN", units: "ms", value: $model.loadWaitMs, range: 0...120000)
-                            timingField("After RUN → before REMOVE", units: "ms", value: $model.runWaitMs, range: 0...120000)
-                            timingField("After REMOVE → before START", units: "ms", value: $model.removeWaitMs, range: 0...120000)
-                            HStack {
-                                Text(model.usesDemo
-                                     ? "Defaults: 50 ms/key · 4 s enumeration · 3 s between commands. Demo LOADV skips the LOAD confirmation."
-                                     : "Defaults: 50 ms/key · 4 s enumeration · 1 s LOAD confirmation · 3 s between commands.")
-                                    .font(.system(size: 10)).fixedSize(horizontal: false, vertical: true)
-                                Spacer(minLength: 8)
-                                Button("Reset defaults") {
-                                    model.keyDelayMs = 50; model.enumerationTimeoutSeconds = 4
-                                    model.loadConfirmWaitMs = 1000; model.loadWaitMs = 3000
-                                    model.runWaitMs = 3000; model.removeWaitMs = 3000
-                                }.font(.system(size: 10))
-                            }
-                            if !timingSettingsValid {
-                                Text("Enter values within the ranges shown before starting.")
-                                    .font(.system(size: 11)).foregroundStyle(.orange)
-                            }
-                        }.padding(.top, 10)
-                    }.font(.system(size: 11)).foregroundStyle(.secondary)
                 }.disabled(model.hasLiveWorkers || model.driverSetupRunning)
             }
             panel {
@@ -334,16 +283,21 @@ struct ContentView: View {
                         Button(model.driverSetupRunning ? "Installing…" : "Install & load driver…") { loadDriver() }
                             .font(.system(size: 11)).disabled(model.driverSetupRunning || model.runtime == nil || model.hasLiveWorkers)
                     }
+                    connectionSettings
                     Group {
                         if model.fullInstall {
                             Text("On the Switch: open SmileBASIC, then **Make a Program** with an empty editor. Leave the editor open while the bootstrap is typed.")
                         } else {
                             Text(model.usesDemo
-                                 ? "On the Switch: **restart the console → open the SmileBASIC demo → enter Direct mode**. The fork’s five-argument bootstrap must already be saved as **TXT:NS2 using SAVEV**. mac2jb restores it into slot 0 automatically."
-                                 : "On the Switch: **restart the console → open SmileBASIC → enter Direct mode**. The fork’s five-argument bootstrap must already be saved as **NS2 in slot 0**. mac2jb loads it automatically.")
+                                 ? "On the Switch: **restart the console → open the SmileBASIC demo → Make a Program**. The fork’s five-argument bootstrap must already be saved as **TXT:NS2 using SAVEV**. mac2jb restores it into slot 0 automatically."
+                                 : "On the Switch: **restart the console → open SmileBASIC → Make a Program**. The fork’s five-argument bootstrap must already be saved as **NS2 in slot 0**. mac2jb loads it automatically.")
                         }
                     }
                         .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if !model.fullInstall {
+                        Text("If the program editor is open, press X to return to the command screen before starting.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                     powerDirectionNotice
                     Toggle("The Switch is ready on the screen described above", isOn: $readyConfirmed)
                         .toggleStyle(.checkbox).font(.system(size: 12, weight: .medium))
@@ -361,6 +315,63 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private var connectionSettings: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            if model.runMode.requiresHost { HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Mac address on the Switch’s network").font(.system(size: 12, weight: .semibold))
+                    if model.addresses.isEmpty {
+                        Text("Connect this Mac to your local network, then refresh.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    } else {
+                        Picker("Network address", selection: $model.selectedAddress) {
+                            ForEach(model.addresses) { address in
+                                Text(address.label).tag(address.address)
+                            }
+                        }.labelsHidden().frame(maxWidth: .infinity)
+                    }
+                }
+                Button { model.refreshChecks() } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Refresh network and driver checks").padding(.top, 22)
+            } }
+            DisclosureGroup("USB controller & timing options") {
+                VStack(alignment: .leading, spacing: 14) {
+                    Picker("Controller", selection: $model.controller) {
+                        Text("Automatic · 0, 1, 3").tag("auto")
+                        ForEach(0..<16) { Text("usb-drd\($0)").tag("usb-drd\($0)") }
+                    }
+                    Divider()
+                    timingField("Delay per key", units: "ms", value: $model.keyDelayMs, range: 1...2000)
+                    timingField("Enumeration timeout per controller", units: "s", value: $model.enumerationTimeoutSeconds, range: 1...120)
+                    Divider()
+                    Text("Post-bootstrap waits").font(.system(size: 11, weight: .semibold)).foregroundStyle(ink)
+                    if !model.usesDemo {
+                        timingField("Before confirming LOAD (YES)", units: "ms", value: $model.loadConfirmWaitMs, range: 0...120000)
+                    }
+                    timingField("After LOAD → before RUN", units: "ms", value: $model.loadWaitMs, range: 0...120000)
+                    timingField("After RUN → before REMOVE", units: "ms", value: $model.runWaitMs, range: 0...120000)
+                    timingField("After REMOVE → before START", units: "ms", value: $model.removeWaitMs, range: 0...120000)
+                    HStack {
+                        Text(model.usesDemo
+                             ? "Defaults: 50 ms/key · 4 s enumeration · 3 s between commands. Demo LOADV skips the LOAD confirmation."
+                             : "Defaults: 50 ms/key · 4 s enumeration · 1 s LOAD confirmation · 3 s between commands.")
+                            .font(.system(size: 10)).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        Button("Reset defaults") {
+                            model.keyDelayMs = 50; model.enumerationTimeoutSeconds = 4
+                            model.loadConfirmWaitMs = 1000; model.loadWaitMs = 3000
+                            model.runWaitMs = 3000; model.removeWaitMs = 3000
+                        }.font(.system(size: 10))
+                    }
+                    if !timingSettingsValid {
+                        Text("Enter values within the ranges shown before starting.")
+                            .font(.system(size: 11)).foregroundStyle(.orange)
+                    }
+                }.padding(.top, 10)
+            }.font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+        .disabled(model.hasLiveWorkers || model.driverSetupRunning)
     }
 
     private var activeSession: some View {

@@ -9,7 +9,7 @@ struct SessionPostRunAction: Equatable {
 }
 
 enum SessionRunMode: String, CaseIterable, Identifiable {
-    case heldRPC, bootstrapOnly, systemCodeDump, exploitOnly
+    case bootstrapOnly, heldRPC, systemCodeDump, exploitOnly
     var id: String { rawValue }
     var number: Int { Self.allCases.firstIndex(of: self)! + 1 }
     var requiresHost: Bool { self != .bootstrapOnly }

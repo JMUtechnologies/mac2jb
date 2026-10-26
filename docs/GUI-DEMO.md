@@ -33,7 +33,7 @@ are included in the prepared app.
 
 ## What the GUI handles
 
-Select the Mac’s IPv4 address on the same network as the Switch. The GUI keeps the host and its current pairing values together, selects a USB controller automatically, and sends the post-bootstrap commands. Install & load driver… installs the bundled unsigned driver through an administrator prompt, preserves an existing driver in a backup, and requests loading. Complete Recovery settings first, then any approval/restart prompts. For the full game, the extra Enter for SmileBASIC’s `LOAD` confirmation is included. Demo mode uses `LOADV` without that confirmation Enter. The expected Out of memory response after `REMOVE` is part of the upstream procedure.
+In Ready Check, select the Mac’s IPv4 address on the same network as the Switch. The USB controller and timing settings are also in Ready Check. The GUI keeps the host and its current pairing values together, selects a USB controller automatically, and sends the post-bootstrap commands. Install & load driver… installs the bundled unsigned driver through an administrator prompt, preserves an existing driver in a backup, and requests loading. Complete Recovery settings first, then any approval/restart prompts. For the full game, the extra Enter for SmileBASIC’s `LOAD` confirmation is included. Demo mode uses `LOADV` without that confirmation Enter. The expected Out of memory response after `REMOVE` is part of the upstream procedure.
 
 ### Choose a mode before starting
 
@@ -42,18 +42,18 @@ Type bootstrap only. This checkbox is off by
 default and remembered between launches. Select it for the demo; leave it
 unchecked for the full game. The selected edition stays fixed during a run.
 
-Held RPC is the first option and selected by default because all homebrew tools require it. Type bootstrap only comes next for initial setup, followed by System-code dump and NS2JB exploit only. Restart the console before every exploit run, then prepare SmileBASIC for the selected choice:
+Type bootstrap only is the first option, with the demo checkbox immediately below it. Held RPC is second and selected by default because all homebrew tools require it. The homebrew list sits directly below Held RPC. System-code dump is third and NS2JB exploit only is fourth, under the optional tasks below homebrew. Restart the console before every exploit run, then prepare SmileBASIC for the selected choice:
 
 | Choice | What happens |
 | --- | --- |
-| Held RPC | Loads the saved `NS2`, sends RUN, REMOVE and START, then keeps the verified connection open for homebrew. Keep mac2jb and SmileBASIC open. Choose Finish session when done. |
 | Type bootstrap only | Types the exact fork bootstrap into an empty SmileBASIC program editor. When typing finishes, manually save it using the commands for your selected edition, confirm the save prompt and return to the start screen. It does not save automatically, start a host or run the exploit. |
+| Held RPC | Loads the saved `NS2`, sends RUN, REMOVE and START, then keeps the verified connection open for homebrew. Keep mac2jb and SmileBASIC open. Choose Finish session when done. |
 | System-code dump | Runs the same saved-bootstrap exploit sequence, captures accessible installed system-program `main` and `main.npdm` files with an inventory and hashes, then releases resources and finishes automatically. Choose Open dump folder after completion. |
 | NS2JB exploit only | Loads the saved new `NS2`, sends RUN, REMOVE, and this host's START command, verifies execution and restoration, then releases resources and finishes. It does not hold RPC open and cannot launch homebrew. |
 
 For Type bootstrap only, open SmileBASIC → Make a Program with an empty
 editor before starting. Allow approximately 7–10 minutes at the default typing
-speed. Wait until typing finishes, then enter Direct mode. The full game
+speed. Wait until typing finishes, then press X to return to Direct mode. The full game
 uses `SAVE "NS2"` with the bootstrap in slot 0. In the demo, manually enter these
 two commands in order:
 
@@ -80,7 +80,7 @@ The maintainer has confirmed manual demo save/load. Automated GUI demo loading
 still needs a console test. Saving the bootstrap does not retain the exploit
 or RPC connection; each exploit attempt needs a fresh console and host session.
 
-For the other three choices, first save the fork's new five-argument bootstrap as `NS2` in slot 0. Restart the console → open SmileBASIC → enter Direct mode, use Ethernet for the Switch 2 until Wi-Fi support is confirmed, select the Mac's IPv4 address on that network, then start. These choices use the saved program and do not type the bootstrap again.
+For the other three choices, first save the fork's new five-argument bootstrap as `NS2` in slot 0. Restart the console → open SmileBASIC → Make a Program → enter Direct mode. Use Ethernet for the Switch 2 until Wi-Fi support is confirmed. In Ready Check, select the Mac's IPv4 address on that network, then start. These choices use the saved program and do not type the bootstrap again.
 
 The selected operation proceeds automatically after 4/4 verification; there is no later options prompt. A dump uses a new private folder and requires at least 512 MiB free on the Mac. Captures cover accessible system-program code, not a full NAND image. Keep SmileBASIC and mac2jb open until the selected operation and final cleanup finish. A failed capture retains partial files and is not automatically retried; keep the output and logs, then restart the console before another attempt.
 

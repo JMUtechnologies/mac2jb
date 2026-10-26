@@ -48,11 +48,11 @@ Its startup menu offers:
 4) Install & load bundled USB driver
 ```
 
-Option 1 — Full install: Open SmileBASIC → Make a Program with an empty editor. Wait until the entire bootstrap has finished typing, then inspect the program, save it as `NS2` in slot 0, and enter Direct mode before pressing Enter. The launcher then starts the ns2jb host in a separate Terminal window and waits for the current session’s pairing command before transmitting post-bootstrap commands.
+Option 1 — Full install: Open SmileBASIC → Make a Program with an empty editor. Wait until the entire bootstrap has finished typing, then inspect the program, press X to return to Direct mode, and save it as `NS2` in slot 0 before pressing Enter. The launcher then starts the ns2jb host in a separate Terminal window and waits for the current session’s pairing command before transmitting post-bootstrap commands.
 
 Bootstrap transfer time: The bundled bootstrap is 8,084 characters over 229 lines. At the default `--delay-ms 50`, typing typically takes about 7–10 minutes, including USB overhead and indentation adjustments. This is an estimate, not a hard timeout. After enumeration succeeds, leave the Terminal window open and the cable connected until typing completes.
 
-Option 2 — Post-bootstrap only: With the fork's new five-argument bootstrap saved as `NS2` in slot 0, restart the console → open SmileBASIC → enter Direct mode. The launcher skips the bootstrap transfer, starts a new ns2jb host session, and automatically sends `LOAD "TXT:NS2"` followed by the remaining post-bootstrap commands.
+Option 2 — Post-bootstrap only: With the fork's new five-argument bootstrap saved as `NS2` in slot 0, restart the console → open SmileBASIC → Make a Program → enter Direct mode. The launcher skips the bootstrap transfer, starts a new ns2jb host session, and automatically sends `LOAD "TXT:NS2"` followed by the remaining post-bootstrap commands.
 
 Option 4 — Install & load bundled USB driver: Installs the included unsigned `usbgadget.kext`, preserves any existing driver in a backup, and requests loading. Configure macOS to permit the unsigned driver; compatible custom SIP configurations are accepted. Complete any macOS approval prompts and restart before choosing option 1 or 2. You can also run `bash mac2jb.command --install-driver` directly.
 
@@ -91,7 +91,7 @@ You can still run the tools without the menu. This is useful for debugging or va
    ./mac2jb-send assets/bootstrap.bas --delay-ms 50
    ```
 
-2. Wait until the entire bootstrap has finished typing, inspect and save it as `NS2` in slot 0, then enter Direct mode. On subsequent runs, skip the lengthy transfer and use the saved program.
+2. Wait until the entire bootstrap has finished typing, inspect it, press X to return to Direct mode, and save it as `NS2` in slot 0. On subsequent runs, skip the lengthy transfer and use the saved program.
 3. Start the ns2jb host from the project root in a separate Terminal window:
 
    ```sh

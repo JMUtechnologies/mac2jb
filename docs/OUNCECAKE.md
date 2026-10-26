@@ -11,8 +11,8 @@ OunceCake does not supply system keys or decrypt files on the Mac.
 1. Use the current five-argument bootstrap saved as NS2 in slot 0. Follow
    the [Homebrew setup](HOMEBREW.md#start-a-fresh-held-rpc-session), including
    the demo checkbox if applicable.
-2. Restart the console, open SmileBASIC in Direct mode and start Held RPC
-   in mac2jb. Wait for 4/4 verification and confirmation that RPC is open.
+2. Restart the console, open SmileBASIC → Make a Program and enter Direct
+   mode. Start Held RPC in mac2jb. Wait for 4/4 verification and confirmation that RPC is open.
 3. Under Homebrew requires Held RPC, find OunceCake. Enter the
    console’s local address in Switch IP address and click Open game list.
 4. Under Choose a game, select the game you want to export, then click

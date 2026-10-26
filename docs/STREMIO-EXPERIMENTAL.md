@@ -20,8 +20,8 @@ defines the catalog, metadata and stream requests it uses.
 2. Use the fork's current five-argument bootstrap, saved in slot 0 as NS2.
    For a demo-capable GUI build, select I’m using the SmileBASIC demo if
    applicable and follow the [demo save/load instructions](../README.md#smilebasic-full-game-versus-demo).
-   Restart the console, open SmileBASIC in Direct mode, choose Held RPC in
-   mac2jb and start a fresh exploit session.
+   Restart the console, open SmileBASIC → Make a Program and enter Direct
+   mode. Choose Held RPC in mac2jb and start a fresh exploit session.
 3. Wait for 4/4 verification and confirmation that RPC is open. Under
    Homebrew requires Held RPC, enter a supported addon's HTTP(S)
    `manifest.json` URL, or sign in on the Mac to import your account addons and
