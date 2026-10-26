@@ -1,0 +1,370 @@
+#!/usr/bin/env node
+'use strict';
+// mac2jb orchestration around the unchanged fork's opt-in held session.
+const fs = require('node:fs');
+const path = require('node:path');
+const net = require('node:net');
+const {spawn} = require('node:child_process');
+const heldMessage = '4/4 verified. SmileBASIC RPC and FS memory endpoint remain live while this process and the app stay open.';
+
+function heldResult(result) {
+  return result?.verified === true && result.fs?.verified === true && result.fs?.restored === true &&
+    result.fs?.retainedEndpoint?.ready === true && result.fs?.cleanup?.deferred === true &&
+    result.fs?.cleanup?.donor?.cleanedUp === true && result.rpc?.mode === 'held' &&
+    result.rpc?.state === 'listening' && !result.error && !result.completed &&
+    (!result.cleanupErrors || Array.isArray(result.cleanupErrors) && result.cleanupErrors.length === 0);
+}
+function privateJSON(file) {
+  const info = fs.lstatSync(file);
+  if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid() ||
+      (info.mode & 0o077) !== 0 || info.size > 8 * 1024 * 1024)
+    throw Error('Invalid session report: ' + file);
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+function ownedRun(candidate, runs) {
+  const directory = path.resolve(candidate);
+  const info = fs.lstatSync(directory);
+  if (path.dirname(directory) !== runs || !info.isDirectory() || info.isSymbolicLink() ||
+      info.uid !== process.getuid() || (info.mode & 0o077) !== 0 ||
+      !fs.realpathSync(directory).startsWith(fs.realpathSync(runs) + path.sep))
+    throw Error('The host reported a run folder outside this session.');
+  return directory;
+}
+function quote(text) { return "'" + text.replace(/'/g, "'\\''") + "'"; }
+function signalGroup(child, signal) {
+  if (!child?.pid) return;
+  try {process.kill(-child.pid, signal);} catch (error) {if (error.code !== 'ESRCH') throw error;}
+}
+function finished(child) {
+  return new Promise(resolve => {
+    child.once('error', error => resolve({code: null, signal: null, error}));
+    child.once('close', (code, signal) => resolve({code, signal}));
+  });
+}
+function heldSignalGuard(message) {
+  // The fork prints its held status just before installing stop handlers.
+  // Buffer a signal in that short interval without altering the fork source.
+  let armed = false, tail = '';
+  const queued = new Set(), handlers = new Map();
+  const originalWrite = process.stdout.write;
+  process.stdout.write = function(chunk, ...args) {
+    tail = (tail + (Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk)));
+    if (tail.includes(message)) armed = true;
+    tail = tail.slice(-message.length);
+    return originalWrite.call(this, chunk, ...args);
+  };
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    const handler = () => {
+      if (process.listenerCount(signal) > 1) return;
+      if (armed) queued.add(signal);
+      else {
+        process.removeListener(signal, handler);
+        process.kill(process.pid, signal);
+      }
+    };
+    handlers.set(signal, handler); process.on(signal, handler);
+  }
+  process.on('newListener', (signal, listener) => {
+    if (!handlers.has(signal) || listener === handlers.get(signal)) return;
+    process.nextTick(() => {
+      if (queued.has(signal) && process.listenerCount(signal) > 1) {
+        queued.delete(signal); process.emit(signal);
+      }
+    });
+  });
+}
+
+async function main({root, address, emit, lines, verifiedResult, input = process.stdin, graceMs = 300000}) {
+  if (!net.isIPv4(address)) throw Error('Choose the Mac’s LAN IPv4 address.');
+  const folder = path.join(root, 'vendor/ns2jb'), runs = path.join(folder, 'runs');
+  fs.mkdirSync(runs, {recursive: true, mode: 0o700}); fs.chmodSync(runs, 0o700);
+  const active = path.join(runs, 'mac2jb-active-connect.txt');
+  try {fs.lstatSync(active); throw Error('This session already has a pairing record. Start a fresh session.');}
+  catch (error) {if (error.code !== 'ENOENT') throw error;}
+  const dumps = path.join(root, 'dumps');
+  fs.mkdirSync(dumps, {recursive: true, mode: 0o700});
+  if (fs.lstatSync(dumps).isSymbolicLink()) throw Error('The dump folder must belong to this private session.');
+  fs.chmodSync(dumps, 0o700);
+  const dumpDirectory = fs.mkdtempSync(path.join(fs.realpathSync(dumps), 'post-run-')); fs.chmodSync(dumpDirectory, 0o700);
+  const controls = fs.mkdtempSync(path.join(runs, '.mac2jb-control-'));
+  const guard = path.join(controls, 'held-signal-guard.cjs');
+  fs.writeFileSync(guard, '(' + heldSignalGuard.toString() + ')(' + JSON.stringify(heldMessage) + ');\n',
+    {mode: 0o600, flag: 'wx'});
+  let runner, helper, directory, rpcCommand, published = false, ready = false, choiceMade = false;
+  let finishing = false, closed = false, outputClosed = false, failure, cancelBeforeReady = false;
+  let finishTimer, helperTimer, dumpTask, statusBusy = false;
+  let rpcHeldConfirmed = false, homebrewAttempted = false, homebrewChild, homebrewTask;
+  let homebrewRunning = false, homebrewSettled = false, homebrewStopTimer, homebrewFailurePublished = false;
+  const safeEmit = (type, fields = {}) => {
+    if (outputClosed) return;
+    try {emit(type, fields);} catch (error) {
+      if (error.code !== 'EPIPE') throw error;
+      outputClosed = true; finish('The app connection closed.');
+    }
+  };
+  function fail(message) {failure ||= message;}
+  function held() {
+    safeEmit('rpc-held', {path: directory, rpcCommand, message: 'RPC remains open. Keep SmileBASIC and mac2jb open.'});
+    rpcHeldConfirmed = true;
+  }
+  function stopHomebrew() {
+    if (!homebrewChild) return;
+    if (!homebrewSettled) {
+      try {homebrewChild.kill('SIGTERM');} catch (error) {if (error.code !== 'ESRCH') fail(error.message);}
+    }
+    homebrewStopTimer ||= setTimeout(() => {
+      fail('The homebrew app did not confirm shutdown. Finish RPC and restart the console.');
+      signalGroup(homebrewChild, 'SIGKILL');
+    }, 300000);
+    homebrewStopTimer.unref();
+  }
+  function finish(reason = 'Finishing the session.') {
+    if (closed || finishing) return;
+    finishing = true;
+    if (statusBusy) fail('The RPC status check was interrupted. Restart the console before another attempt.');
+    if (helper) {
+      fail('The firmware dump was interrupted. Keep its partial files and restart the console before retrying.');
+      signalGroup(helper, 'SIGTERM');
+      helperTimer = setTimeout(() => signalGroup(helper, 'SIGKILL'), 2000);
+      helperTimer.unref();
+    }
+    if (ready) {
+      safeEmit('rpc-finishing', {message: reason + ' Releasing held resources and closing RPC.'});
+      const releaseRunner = () => {
+        if (closed) return;
+        // HBLauncher owners stop while RPC is live, before fork IPC cleanup.
+        try {runner.kill('SIGTERM');} catch (error) {if (error.code !== 'ESRCH') fail(error.message);}
+        finishTimer = setTimeout(() => {
+          fail('Held-session cleanup timed out. Restart the console before another attempt.');
+          safeEmit('log', {message: failure});
+          signalGroup(runner, 'SIGKILL');
+        }, graceMs);
+        finishTimer.unref();
+      };
+      if (homebrewChild) {stopHomebrew(); homebrewTask.finally(releaseRunner);}
+      else releaseRunner();
+    } else {
+      cancelBeforeReady = true;
+      signalGroup(runner, 'SIGTERM');
+      finishTimer = setTimeout(() => signalGroup(runner, 'SIGKILL'), 2000);
+    }
+    finishTimer?.unref();
+  }
+  const stop = () => finish('Session stopped.');
+  const pipeError = error => {
+    if (error.code !== 'EPIPE') {fail(error.message);}
+    outputClosed = true; finish('The app connection closed.');
+  };
+  process.stdout.on('error', pipeError);
+  process.on('SIGTERM', stop); process.on('SIGINT', stop);
+  try {
+    runner = spawn(process.execPath, ['--require', guard, 'run.cjs', '--rpc', address], {
+      cwd: folder, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+      env: {...process.env, NS2_BASIC_ARITY: '5', NS2_RPC_MODE: '0', NS2_FIRMWARE_DUMP_DIR: dumpDirectory}
+    });
+    const runnerDone = finished(runner);
+    function output(line) {
+      try {
+        const clean = line.trim();
+        const start = /^V=START\((\d+(?:,\d+){4})\)$/.exec(clean);
+        if (start && !published && !finishing) {
+          const values = start[1].split(',').map(Number);
+          if (values[0] === 39380 && values.slice(1).join('.') === address &&
+              values.every(Number.isSafeInteger) && values.slice(1).every(value => value <= 255)) {
+            const temporary = active + '.' + process.pid + '.tmp';
+            fs.writeFileSync(temporary, `${runner.pid}\n${clean}\n`, {mode: 0o600, flag: 'wx'});
+            try {fs.linkSync(temporary, active);} finally {fs.unlinkSync(temporary);}
+            published = true; safeEmit('host-ready', {message: 'Fresh host pairing is ready.'});
+          }
+        }
+        if (clean.startsWith('Run folder: ')) {
+          const candidate = ownedRun(clean.slice('Run folder: '.length), runs);
+          if (directory && directory !== candidate) throw Error('The host changed its run folder.');
+          directory = candidate; safeEmit('run-folder', {path: directory});
+        }
+        if (clean.startsWith('Waiting for Switch 2 at '))
+          safeEmit('host-stage', {stage: 'waiting', message: 'Waiting for the Switch to connect over the local network'});
+        else if (clean.startsWith('Connected. Checking the application'))
+          safeEmit('host-stage', {stage: 'connected', message: 'Switch connected — checking the application'});
+        else if (/^[1-4]\/4 /.test(clean))
+          safeEmit('host-stage', {stage: 'pipeline', completed: Number(clean[0])-1, total: 4, message: clean});
+        if (clean === heldMessage && !ready && !finishing) {
+          const report = directory && privateJSON(path.join(directory, 'result.json'));
+          const connection = directory && privateJSON(path.join(directory, 'connection.json'));
+          if (!directory || !heldResult(report) ||
+              report.fs.retainedEndpoint.session !== path.basename(directory) ||
+              connection.addresses?.session !== path.basename(directory) || connection.addresses?.target !== 'switch2' ||
+              !Number.isSafeInteger(connection.port) || connection.port < 1 || connection.port > 65535)
+            throw Error('The host did not verify a restored, live held session.');
+          ready = true;
+          rpcCommand = [process.execPath, path.join(folder, 'rpc.cjs'), directory, 'status'].map(quote).join(' ');
+          safeEmit('post-run-ready', {path: directory, rpcCommand,
+            message: 'FS execution and restoration verified. Preparing the selected session action.'});
+        }
+        safeEmit('log', {message: line});
+      } catch (error) {fail(error.message); finish('The session could not be verified.');}
+    }
+    lines(runner.stdout, output); lines(runner.stderr, output);
+
+    async function dump(keepRPC) {
+      safeEmit('dump-started', {path: dumpDirectory, message: 'Dumping installed system code. Keep SmileBASIC open.'});
+      helper = spawn(process.execPath, [path.join(root, 'scripts/gui-dump.cjs'), directory, dumpDirectory], {
+        cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+        env: {...process.env, NS2_FIRMWARE_DUMP_DIR: dumpDirectory}
+      });
+      const child = helper;
+      const helperDone = finished(child);
+      const observe = line => {
+        if (line.trim().startsWith('Firmware:')) safeEmit('dump-progress', {message: line.trim()});
+        else safeEmit('log', {message: line});
+      };
+      lines(child.stdout, observe); lines(child.stderr, observe);
+      const outcome = await helperDone;
+      clearTimeout(helperTimer); helper = undefined;
+      if (closed || finishing) return;
+      if (outcome.error || outcome.code !== 0 || outcome.signal)
+        throw Error('The firmware dump failed. Partial files were retained; do not retry this session.');
+      const manifest = privateJSON(path.join(dumpDirectory, 'firmware-dump.json'));
+      if (manifest.complete !== true || !Array.isArray(manifest.entries) ||
+          !Number.isSafeInteger(manifest.inventory?.total) || manifest.inventory.total < 0 ||
+          manifest.entries.length !== manifest.inventory.total)
+        throw Error('The firmware dump did not produce a complete inventory.');
+      safeEmit('dump-complete', {path: dumpDirectory, message: 'Firmware dump completed and its inventory verified.'});
+      if (keepRPC) held();
+      else finish('Firmware dump completed.');
+    }
+    async function homebrew(application = "hblauncher", config = {}) {
+      homebrewChild = spawn(process.execPath, [path.join(root, application === 'stremio' ? 'scripts/gui-stremio.cjs' : 'scripts/gui-homebrew.cjs'), directory], {
+        cwd: root, detached: true, stdio: [application === 'stremio' ? 'pipe' : 'ignore', 'pipe', 'pipe'], env: {...process.env}
+      });
+      if (application === 'stremio') {
+        homebrewChild.stdin.on('error', error => {if (error.code !== 'EPIPE') fail('Could not configure the experimental player.');});
+        homebrewChild.stdin.end(JSON.stringify(config) + '\n');
+      }
+      const child = homebrewChild, done = finished(child);
+      const observe = line => {
+        if (!line.startsWith('MAC2JB_HOMEBREW ')) {safeEmit('log', {message: line}); return;}
+        let event;
+        try {event = JSON.parse(line.slice('MAC2JB_HOMEBREW '.length));}
+        catch {safeEmit('log', {message: 'Invalid homebrew event.'}); return;}
+        if (event.type === 'account-progress') {
+          if (application === 'stremio' && event.watchProgress && typeof event.watchProgress === 'object' && !Array.isArray(event.watchProgress))
+            safeEmit('account-progress', {watchProgress: event.watchProgress});
+          return;
+        }
+        if (!['started','progress','running','stopped','failed'].includes(event.type)) return;
+        if (event.type === 'running') homebrewRunning = true;
+        if (event.type === 'stopped' || event.type === 'failed') {homebrewRunning = false; homebrewSettled = true;}
+        if (event.type === 'failed') {fail(event.message || 'HBLauncher failed. Restart the console.'); homebrewFailurePublished = true;}
+        safeEmit('homebrew-' + event.type, {path: event.path || directory, message: event.message});
+      };
+      lines(child.stdout, observe); lines(child.stderr, observe);
+      const outcome = await done;
+      clearTimeout(homebrewStopTimer); homebrewStopTimer = undefined;
+      homebrewChild = undefined; homebrewRunning = false;
+      if (outcome.error || outcome.code !== 0 || outcome.signal) {
+        fail('HBLauncher failed or did not confirm shutdown. Finish RPC and restart the console.');
+        if (!homebrewFailurePublished) safeEmit('homebrew-failed', {path: directory,
+          message: failure + ' This launch was not retried.'});
+      }
+    }
+    async function control(line) {
+      let command;
+      try {command = JSON.parse(line);} catch {safeEmit('action-rejected', {message: 'Invalid session action.'}); return;}
+      if (!command || typeof command !== 'object' || Array.isArray(command)) {
+        safeEmit('action-rejected', {message: 'Invalid session action.'}); return;
+      }
+      if (!ready || closed || finishing) {safeEmit('action-rejected', {message: 'The session is not ready for this action.'}); return;}
+      if (command.action === 'finish') {
+        if (helper || statusBusy || homebrewChild && !homebrewRunning && !homebrewSettled) {
+          safeEmit('action-rejected', {message: 'Wait for the current operation to finish.'}); return;
+        }
+        choiceMade = true; finish(); return;
+      }
+      if (command.action === 'launch-hblauncher' || command.action === 'launch-stremio') {
+        if (command.action === 'launch-stremio' && (command.addonUrls !== undefined &&
+            (!Array.isArray(command.addonUrls) || command.addonUrls.length > 32 ||
+             command.addonUrls.some(url => typeof url !== 'string' || url.length > 4096)) ||
+            command.libraryItems !== undefined && (!Array.isArray(command.libraryItems) || command.libraryItems.length > 500 ||
+             command.libraryItems.some(item => !item || typeof item !== 'object' || Array.isArray(item))))) {
+          safeEmit('action-rejected', {message:'The add-on configuration is invalid.'}); return;
+        }
+        if (!rpcHeldConfirmed || homebrewAttempted || helper || statusBusy) {
+          safeEmit('action-rejected', {message: 'Homebrew requires this session’s held RPC and can be launched only once.'}); return;
+        }
+        homebrewAttempted = true;
+        homebrewTask = homebrew(command.action === 'launch-stremio' ? 'stremio' : 'hblauncher',
+          {addonUrls: command.addonUrls || [], libraryItems: command.libraryItems || []}).catch(error => {
+          fail(error.message); safeEmit('homebrew-failed', {path: directory,
+            message: error.message + ' Finish RPC and restart the console. This launch was not retried.'});
+        });
+        return;
+      }
+      if (command.action === 'rpc-status') {
+        if (statusBusy || helper || homebrewAttempted) {safeEmit('action-rejected', {message: 'Wait for the current operation to finish.'}); return;}
+        statusBusy = true; safeEmit('rpc-status-started', {message: 'Checking the held RPC connection.'});
+        try {
+          const result = await require(path.join(folder, 'rpc.cjs')).request(directory, {command: 'status'});
+          safeEmit('rpc-status', {ready: result?.ready === true, calls: result?.calls,
+            message: result?.ready === true ? 'RPC is connected.' : 'RPC is not ready.'});
+        } catch (error) {safeEmit('rpc-status', {ready: false, message: 'RPC status failed: ' + error.message});}
+        finally {statusBusy = false;}
+        return;
+      }
+      if (command.action !== 'post-run' || typeof command.keepRPC !== 'boolean' ||
+          typeof command.dumpFirmware !== 'boolean' || choiceMade) {
+        safeEmit('action-rejected', {message: 'Choose post-run options once for this session.'}); return;
+      }
+      choiceMade = true;
+      if (command.dumpFirmware) dumpTask = dump(command.keepRPC).catch(error => {fail(error.message); finish('The dump did not finish.');});
+      else if (command.keepRPC) held();
+      else finish();
+    }
+    const inputEnd = () => finish('The app closed its session controls.');
+    lines(input, line => {control(line).catch(error => {fail(error.message); finish();});}, 4 * 1024 * 1024);
+    input.once('end', inputEnd); input.resume();
+    const outcome = await runnerDone;
+    closed = true; clearTimeout(finishTimer);
+    if (homebrewChild) {
+      fail('The original RPC session ended while HBLauncher was active. Restart the console.');
+      stopHomebrew(); await homebrewTask;
+    }
+    if (helper) {
+      fail('The host ended during the firmware dump. Restart the console before retrying.');
+      signalGroup(helper, 'SIGTERM');
+      helperTimer = setTimeout(() => signalGroup(helper, 'SIGKILL'), 2000); helperTimer.unref();
+    }
+    if (dumpTask) await dumpTask;
+    input.removeListener('end', inputEnd); input.pause();
+    let result;
+    if (directory) {try {result = privateJSON(path.join(directory, 'result.json'));} catch (error) {fail(error.message);}}
+    if (!failure && ready && outcome.code === 0 && !outcome.signal && !outcome.error &&
+        verifiedResult(result) && result.rpc?.mode === 'held' && result.rpc?.state === 'closed' &&
+        typeof result.completed === 'string' && !result.error &&
+        (!result.cleanupErrors || result.cleanupErrors.length === 0)) {
+      safeEmit('verified', {message: homebrewAttempted ?
+        'FS execution and fork cleanup verified; Homebrew workers stopped. Restart the console to release retained graphics allocations.' :
+        'FS execution verified; held RPC closed and all resources cleaned up.'});
+      return 0;
+    }
+    if (cancelBeforeReady && !failure) {
+      safeEmit('cancelled', {message: 'Session stopped. Restart the console before another exploit attempt.'}); return 130;
+    }
+    safeEmit('failed', {path: dumpDirectory, message: failure || result?.error || outcome.error?.message ||
+      'The host ended without verified cleanup. Restart the console before retrying.'});
+    return outcome.code || 1;
+  } finally {
+    clearTimeout(finishTimer); clearTimeout(helperTimer); clearTimeout(homebrewStopTimer);
+    process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop);
+    // Keep the stdout error listener through process exit so a late EPIPE cannot
+    // interrupt cleanup or turn a clean shutdown into an uncaught exception.
+    if (published) {
+      try {if (fs.readFileSync(active, 'utf8').startsWith(`${runner.pid}\n`)) fs.unlinkSync(active);} catch {}
+    }
+    if (!closed && runner?.pid) signalGroup(runner, 'SIGKILL');
+    if (helper?.pid) signalGroup(helper, 'SIGKILL');
+    if (homebrewChild?.pid) signalGroup(homebrewChild, 'SIGKILL');
+    fs.rmSync(controls, {recursive: true, force: true});
+  }
+}
+module.exports = {main, heldResult, heldMessage};

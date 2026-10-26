@@ -23,6 +23,12 @@ if CommandLine.arguments.contains("--self-test") {
                                  "--load-wait-ms", "3000", "--run-wait-ms", "3000", "--remove-wait-ms", "3000"]),
             ("mac2jb-commands", ["--gui-timing-test", "--gui-events", "--load-confirm-wait-ms", "10",
                                  "--load-wait-ms", "10", "--run-wait-ms", "10", "--remove-wait-ms", "10"]),
+            ("node", ["--check", "scripts/gui-session.cjs"]),
+            ("node", ["--check", "scripts/gui-dump.cjs"]),
+            ("node", ["--check", "scripts/gui-homebrew.cjs"]),
+            ("node", ["scripts/check-homebrew-runtime.cjs"]),
+            ("node", ["--check", "scripts/gui-stremio.cjs"]),
+            ("node", ["scripts/check-stremio-runtime.cjs"]),
             ("node", ["scripts/gui-host.cjs", "--self-test"])
         ]
         for (tool, arguments) in checks {
@@ -37,7 +43,7 @@ if CommandLine.arguments.contains("--self-test") {
                               userInfo: [NSLocalizedDescriptionKey: "Check failed: \(tool)"])
             }
         }
-        print("mac2jb 0.3.2: embedded runtime and dry-run checks passed; no USB input sent.")
+        print("\(AppBuildIdentity.diagnosticLabel): embedded runtime and dry-run checks passed; no USB input sent.")
         try? FileManager.default.removeItem(at: testParent)
         exit(0)
     } catch {
@@ -50,7 +56,7 @@ struct Mac2jbApp: App {
     @StateObject private var model = SessionModel()
     @StateObject private var updater = AppUpdater()
     var body: some Scene {
-        WindowGroup("mac2jb") {
+        WindowGroup(AppBuildIdentity.isTestBuild ? "mac2jb Kurumuz Test" : "mac2jb") {
             ContentView(model: model, updater: updater)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     model.cancel()
@@ -63,6 +69,7 @@ struct Mac2jbApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.check() }.disabled(updater.isWorking)
                 Toggle("Check for Updates Automatically", isOn: $updater.checksAutomatically)
+                    .disabled(AppBuildIdentity.isTestBuild)
             }
         }
     }

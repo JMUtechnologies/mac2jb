@@ -8,6 +8,7 @@ private let mist = Color(red: 0.95, green: 0.97, blue: 0.96)
 struct ContentView: View {
     @ObservedObject var model: SessionModel
     @ObservedObject var updater: AppUpdater
+    @StateObject private var account = StremioAccount()
     @State private var readyConfirmed = false
     @State private var savedConfirmed = false
     @State private var showLogs = false
@@ -30,10 +31,16 @@ struct ContentView: View {
         case .preparing: return "Getting everything ready."
         case .ready: return "Get started"
         case .bootstrap: return "Your Mac is doing the typing."
-        case .awaitingSave: return "A quick check on your Switch."
+        case .awaitingSave: return "Save the bootstrap on your Switch."
         case .hostStarting: return "Starting a fresh session."
         case .commands: return "Sending post-bootstrap commands."
         case .waitingForConsole: return "Following the console session."
+        case .rpcHeld: return "Your RPC session is open."
+        case .dumpingFirmware: return "Saving system code."
+        case .rpcFinishing: return "Finishing the session."
+        case .launchingHomebrew: return "Starting \(model.homebrewTitle)."
+        case .homebrewRunning: return "\(model.homebrewTitle) is running."
+        case .homebrewStopped: return "Finish the homebrew session."
         case .verified: return "FS execution verified."
         case .failed: return "Let’s check what happened."
         case .cancelled: return "Session stopped."
@@ -60,9 +67,14 @@ struct ContentView: View {
         .preferredColorScheme(.light)
         .tint(teal)
         .onAppear {
+            model.accountProgressHandler = { [weak account] update in account?.handleProgress(update) }
             model.prepare()
             updater.start()
             NSApp.activate(ignoringOtherApps: true)
+        }
+        .onDisappear {
+            model.accountProgressHandler = nil
+            account.cancelSignIn()
         }
         .onChange(of: model.phase) { _, phase in
             readyConfirmed = false
@@ -75,7 +87,7 @@ struct ContentView: View {
                 showFailure = true
             }
         }
-        .onChange(of: model.fullInstall) { _, _ in readyConfirmed = false }
+        .onChange(of: model.runMode) { _, _ in readyConfirmed = false }
         .onChange(of: updater.state) { _, state in if state == .failed { showUpdateFailure = true } }
         .alert("The session needs attention", isPresented: $showFailure) {
             if model.diagnosticLogURL != nil {
@@ -149,10 +161,10 @@ struct ContentView: View {
             VStack(spacing: 26) {
                 step(0, "Prepare", "Mac, network & console")
                 step(1, "Type bootstrap", model.fullInstall ? "Type first, then save" : "Use your saved NS2")
-                step(2, "Run & verify", "Host and commands")
+                step(2, "Run & verify", model.fullInstall ? "Choose a separate run mode" : "Host and commands")
             }.padding(.top, 55)
             Spacer(minLength: 40)
-            Text("v0.3.2")
+            Text(AppBuildIdentity.versionLabel)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.35))
         }
@@ -209,16 +221,31 @@ struct ContentView: View {
         VStack(spacing: 18) {
             if model.phase == .failed || model.phase == .cancelled {
                 note(model.detail, icon: "exclamationmark.circle", color: .orange)
+                if model.hasLiveWorkers {
+                    Text("Waiting for the previous host to finish cleanup before another session can start.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                if model.dumpFolder != nil {
+                    Button("Open dump folder") { model.revealDumpFolder() }
+                }
             }
             panel {
                 VStack(alignment: .leading, spacing: 16) {
                     eyebrow("01 / STARTING POINT")
-                    HStack(spacing: 12) {
-                        modeCard(full: true, title: "Full setup", subtitle: "Type the bootstrap, then run.", icon: "keyboard")
-                        modeCard(full: false, title: "NS2 already saved", subtitle: "Skip straight to the host.", icon: "bolt")
-                    }
+                    modeCard(.bootstrapOnly)
                     Divider()
-                    HStack(alignment: .top, spacing: 16) {
+                    Text("Already have bootstrap.bas saved to slot 0 as NS2?")
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+                    HStack(alignment: .top, spacing: 10) {
+                        modeCard(.exploitOnly)
+                        modeCard(.heldRPC)
+                        modeCard(.systemCodeDump)
+                    }
+                    Text("For any of these three runs, restart the Switch, open SmileBASIC and enter Direct mode. Each starts a fresh exploit using your saved NS2.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    homebrewSection
+                    Divider()
+                    if model.runMode.requiresHost { HStack(alignment: .top, spacing: 16) {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Mac address on the Switch’s network").font(.system(size: 12, weight: .semibold))
                             if model.addresses.isEmpty {
@@ -233,7 +260,7 @@ struct ContentView: View {
                         }
                         Button { model.refreshChecks() } label: { Image(systemName: "arrow.clockwise") }
                             .help("Refresh network and driver checks").padding(.top, 22)
-                    }
+                    } }
                     DisclosureGroup("USB controller & timing options") {
                         VStack(alignment: .leading, spacing: 14) {
                             Picker("Controller", selection: $model.controller) {
@@ -265,7 +292,7 @@ struct ContentView: View {
                             }
                         }.padding(.top, 10)
                     }.font(.system(size: 11)).foregroundStyle(.secondary)
-                }
+                }.disabled(model.hasLiveWorkers || model.driverSetupRunning)
             }
             panel {
                 VStack(alignment: .leading, spacing: 15) {
@@ -279,13 +306,13 @@ struct ContentView: View {
                         }
                         Spacer()
                         Button(model.driverSetupRunning ? "Installing…" : "Install & load driver…") { loadDriver() }
-                            .font(.system(size: 11)).disabled(model.driverSetupRunning || model.runtime == nil)
+                            .font(.system(size: 11)).disabled(model.driverSetupRunning || model.runtime == nil || model.hasLiveWorkers)
                     }
                     Group {
                         if model.fullInstall {
                             Text("On the Switch: open SmileBASIC, then **Make a Program** with an empty editor. Leave the editor open while the bootstrap is typed.")
                         } else {
-                            Text("On the Switch: **restart the console → open SmileBASIC → enter Direct mode**. mac2jb loads NS2 automatically.")
+                            Text("On the Switch: **restart the console → open SmileBASIC → enter Direct mode**. The fork’s five-argument bootstrap must already be saved as **NS2 in slot 0**. mac2jb loads it automatically.")
                         }
                     }
                         .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -293,15 +320,15 @@ struct ContentView: View {
                     Toggle("The Switch is ready on the screen described above", isOn: $readyConfirmed)
                         .toggleStyle(.checkbox).font(.system(size: 12, weight: .medium))
                     HStack {
-                        Text(model.fullInstall ? "Bootstrap typing uses your selected key delay (50 ms by default)." : "Starts a new host session with fresh pairing values.")
+                        Text(model.fullInstall ? "Types the bootstrap at your selected key delay, then stops for saving." : model.runMode.caption)
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                         Spacer()
                         Button { showLogs = true; model.start() } label: {
-                            HStack(spacing: 10) { Text(model.fullInstall ? "Start full setup" : "Start session"); Image(systemName: "arrow.right") }
+                            HStack(spacing: 10) { Text(model.runMode.startTitle); Image(systemName: "arrow.right") }
                                 .padding(.horizontal, 10).padding(.vertical, 6)
                         }
                         .buttonStyle(PrimaryActionStyle()).fixedSize()
-                        .disabled(!readyConfirmed || model.selectedAddress.isEmpty || model.runtime == nil || !model.driverLoaded || !timingSettingsValid || model.driverSetupRunning || updater.blocksNewSession)
+                        .disabled(!readyConfirmed || model.runMode.requiresHost && model.selectedAddress.isEmpty || model.runtime == nil || !model.driverLoaded || !timingSettingsValid || model.driverSetupRunning || model.hasLiveWorkers || updater.blocksNewSession)
                     }
                 }
             }
@@ -318,7 +345,7 @@ struct ContentView: View {
                         .background(teal.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
                     VStack(alignment: .leading, spacing: 6) {
                         Text(model.status).font(.system(size: 17, weight: .semibold)).foregroundStyle(ink)
-                        Text(model.selectedAddress.isEmpty ? "Preparing the embedded runtime" : "\(model.selectedAddress) · \(model.controller == "auto" ? "Automatic controller" : model.controller)")
+                        Text(model.activeRunMode == .bootstrapOnly ? "Bootstrap only · \(model.controller == "auto" ? "Automatic controller" : model.controller)" : model.selectedAddress.isEmpty ? "Preparing the embedded runtime" : "\(model.selectedAddress) · \(model.controller == "auto" ? "Automatic controller" : model.controller)")
                             .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     }
                 }
@@ -346,18 +373,34 @@ struct ContentView: View {
                 if model.isEnumerating { powerDirectionNotice }
                 if model.phase == .awaitingSave {
                     Divider()
-                    Text("The bootstrap has finished typing. Enter **Direct mode**, type `SAVE \"NS2\"`, and save it in **slot 0**. Then continue to host & commands; the GUI will send LOAD, RUN, REMOVE, and this session’s START command.")
+                    Text("The bootstrap has finished typing. Enter **Direct mode**, type `SAVE \"NS2\"`, and save it in **slot 0**. Return to the start screen after saving; then choose an exploit mode for a separate run.")
                         .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Toggle("NS2 is saved in slot 0 and I have entered Direct mode", isOn: $savedConfirmed)
                         .toggleStyle(.checkbox).font(.system(size: 12, weight: .medium))
-                    Button("Continue to host & commands") { model.confirmSavedAndDirectMode() }
-                        .buttonStyle(PrimaryActionStyle()).fixedSize().disabled(!savedConfirmed)
+                    Button("NS2 saved — back to start") { model.finishBootstrapOnly() }
+                        .buttonStyle(PrimaryActionStyle()).fixedSize().disabled(!savedConfirmed || model.hasLiveWorkers)
                 } else if model.phase == .verified {
                     Text("The host confirmed execution, restoration, and cleanup. Restart the console when finished.")
                         .font(.system(size: 13)).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Back to start") { model.returnToStart() }
+                            .buttonStyle(PrimaryActionStyle()).fixedSize().disabled(!model.canReturnToStart)
+                        if model.hasLiveWorkers {
+                            Text("Waiting for the session workers to close…")
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                        }
+                    }
                 } else if model.phase == .waitingForConsole {
                     Text("Keyboard transmission is complete. Keep SmileBASIC open and both devices awake while the host checks the result.")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                if model.postRun.isActive { postRunControls }
+                if model.activeRunMode == .heldRPC && (model.postRun.isActive || model.postRun.homebrewAttempted) {
+                    homebrewSection
+                }
+                if model.postRun.dumpCompleted, model.dumpFolder != nil {
+                    Button("Open dump folder") { model.revealDumpFolder() }
+                        .font(.system(size: 12))
                 }
                 if model.isBusy || model.phase == .awaitingSave {
                     HStack {
@@ -368,6 +411,131 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var homebrewSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Already got the ns2jb exploit running?")
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "gamecontroller").font(.system(size: 22)).foregroundStyle(teal)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("HBLauncher v0.2.0").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+                    Text(homebrewCaption).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button(model.postRun.homebrewAttempted && model.homebrewTitle.contains("HBLauncher") ? homebrewActionTitle : "Launch HBLauncher") { model.launchHomebrew() }
+                    .font(.system(size: 11, weight: .medium)).disabled(!model.canLaunchHomebrew)
+            }
+            Text("Includes ftpd-sb v0.1.0 in HBLauncher’s app menu.")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+            Divider()
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "play.rectangle").font(.system(size: 22)).foregroundStyle(teal)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Stremio · experimental").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+                    Text("Mac-assisted HTTP and HLS player. Stremio must be installed on this Mac.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if !model.postRun.homebrewAttempted {
+                        TextField("Optional Stremio add-on manifest URL", text: $model.stremioAddonURL)
+                            .textFieldStyle(.roundedBorder).font(.system(size: 11))
+                            .disabled(!canConfigure && !model.canLaunchHomebrew)
+                        Text("Leave empty to use your account add-ons, or the bundled 30-second movie test. Library and watch progress sync with your account; torrents and subtitles are unsupported.")
+                            .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 8)
+                Button(model.postRun.homebrewAttempted && model.homebrewTitle.contains("Stremio") ? homebrewActionTitle : "Launch Stremio") {
+                    model.launchHomebrew(stremio: true, accountAddons: account.addonURLs,
+                                         libraryItems: account.libraryPayload())
+                }
+                .font(.system(size: 11, weight: .medium))
+                .disabled(!model.canLaunchHomebrew || !model.stremioToolsAvailable || account.signingIn)
+            }
+            stremioAccountControls
+            if !model.stremioToolsAvailable {
+                Text("Install Stremio on this Mac to enable the experimental player.").font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            if model.homebrewFolder != nil {
+                Button("Open homebrew logs") { model.revealHomebrewLogs() }.font(.system(size: 11))
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(teal.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var homebrewCaption: String {
+        if canConfigure { return "Start Held RPC above and wait for 4/4 verification in this app." }
+        if model.postRun.homebrewAttempted {
+            return model.homebrewTitle.contains("HBLauncher")
+                ? "HBLauncher uses this app’s verified held RPC session. Keep SmileBASIC open until you finish."
+                : "Start a fresh Held RPC session after restarting the console to launch HBLauncher."
+        }
+        if model.canLaunchHomebrew { return "Launch using this app’s current verified held RPC session." }
+        return "Waiting for this app’s held RPC session to be confirmed and idle."
+    }
+
+    private var stremioAccountControls: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 10) {
+                if account.signingIn {
+                    ProgressView().controlSize(.small)
+                    Button("Cancel sign-in") { account.cancelSignIn() }
+                } else if account.signedIn {
+                    Text(account.displayName.map { "Stremio: \($0)" } ?? "Signed in to Stremio")
+                    Text("\(account.libraryCount) library items").foregroundStyle(.secondary)
+                    Button("Refresh") { account.refresh() }
+                    Button("Sign out") { account.signOut() }
+                } else {
+                    Button("Sign in to Stremio") { account.signIn() }
+                    Text("Optional · account stays on this Mac").foregroundStyle(.secondary)
+                }
+            }
+            .disabled(model.postRun.homebrewAttempted && model.hasLiveWorkers)
+            Text(account.status).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !account.watchProgressStatus.isEmpty {
+                Text(account.watchProgressStatus).foregroundStyle(.secondary)
+            }
+        }
+        .font(.system(size: 10))
+    }
+
+    private var homebrewActionTitle: String {
+        switch model.postRun.homebrewStage {
+        case .idle: return "Launch HBLauncher"
+        case .launching: return "Starting…"
+        case .running: return "Running"
+        case .stopped, .failed: return "Launch unavailable"
+        }
+    }
+
+    private var postRunControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider()
+            Text("4/4 verified · original instructions restored")
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(teal)
+            Text(model.phase == .dumpingFirmware
+                 ? "Keep SmileBASIC open until the dump finishes. Stop session may leave a partial dump."
+                 : "Keep SmileBASIC open until the host has finished final cleanup.")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+            if !model.rpcCommand.isEmpty {
+                Text(model.rpcCommand).font(.system(size: 10, design: .monospaced))
+                    .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if !model.rpcStatus.isEmpty {
+                Text(model.rpcStatus).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            HStack(spacing: 12) {
+                Button(model.postRun.statusInFlight ? "Checking RPC…" : "Check RPC") { model.checkRPCStatus() }
+                    .disabled(!model.postRun.canCheckStatus)
+                Button("Copy RPC command") { model.copyRPCCommand() }.disabled(model.rpcCommand.isEmpty)
+                Button("Open run logs") { model.revealRunFolder() }
+                Spacer()
+                Button("Finish session") { model.finishPostRun() }.disabled(!model.postRun.canFinish)
+            }.font(.system(size: 11))
         }
     }
 
@@ -417,21 +585,24 @@ struct ContentView: View {
         }.font(.system(size: 10)).foregroundStyle(.secondary))
     }
 
-    private func modeCard(full: Bool, title: String, subtitle: String, icon: String) -> some View {
-        Button { model.fullInstall = full } label: {
+    private func modeCard(_ mode: SessionRunMode) -> some View {
+        Button { model.selectRunMode(mode) } label: {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: icon).font(.system(size: 17)).frame(width: 22)
+                Text("\(mode.number)").font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .frame(width: 23, height: 23).background(teal.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(title).font(.system(size: 13, weight: .semibold))
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Label(mode.title, systemImage: mode.icon).font(.system(size: 12, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(mode.caption).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: model.fullInstall == full ? "largecircle.fill.circle" : "circle").font(.system(size: 14))
+                Image(systemName: model.runMode == mode ? "largecircle.fill.circle" : "circle").font(.system(size: 13))
             }
-            .foregroundStyle(model.fullInstall == full ? teal : ink)
+            .foregroundStyle(model.runMode == mode ? teal : ink)
             .padding(15).frame(maxWidth: .infinity, alignment: .leading)
-            .background(model.fullInstall == full ? teal.opacity(0.06) : .white, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(model.fullInstall == full ? teal.opacity(0.6) : .gray.opacity(0.18), lineWidth: 1))
+            .background(model.runMode == mode ? teal.opacity(0.06) : .white, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(model.runMode == mode ? teal.opacity(0.6) : .gray.opacity(0.18), lineWidth: 1))
         }.buttonStyle(.plain)
     }
     private var powerDirectionNotice: some View {

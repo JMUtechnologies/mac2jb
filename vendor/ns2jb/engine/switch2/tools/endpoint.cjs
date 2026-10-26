@@ -2,12 +2,12 @@ const net = require('node:net');
 const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
 
-function requestOnce(socketPath, command) {
+function requestOnce(socketPath, command, timeoutMs = 300000) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     let input = '';
     socket.setEncoding('utf8');
-    socket.setTimeout(60000, () => socket.destroy(Error('Memory request timed out; it was not replayed')));
+    socket.setTimeout(timeoutMs, () => socket.destroy(Error('Memory request timed out; it was not replayed')));
     socket.on('error', reject);
     socket.on('connect', () => socket.write(JSON.stringify(command) + '\n'));
     socket.on('data', part => {
@@ -24,10 +24,10 @@ function requestOnce(socketPath, command) {
   });
 }
 
-async function request(socketPath, command) {
+async function request(socketPath, command, timeoutMs = 60000) {
   const deadline = Date.now() + 3000;
   for (;;) {
-    try {return await requestOnce(socketPath, command);}
+    try {return await requestOnce(socketPath, command, timeoutMs);}
     catch (error) {
       // The busy reply is sent before dispatch. Every other failure is final.
       if (error.message !== 'Another memory request is active' || Date.now() >= deadline) throw error;

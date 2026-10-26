@@ -57,6 +57,7 @@ for item in \
     upstream.lock \
     make-release-zip.command \
     scripts \
+    stremio \
     gui \
     docs \
     packaging \
@@ -69,20 +70,32 @@ do
     fi
 done
 
+# Record the source build identity.
+python3 - "$PWD/gui/Info.plist" "$TMP/mac2jb" <<'PYTEST'
+import json, plistlib, sys
+from pathlib import Path
+info, stage = map(Path, sys.argv[1:])
+test = plistlib.loads(info.read_bytes()).get('MAC2JBTestBuild') is True
+(stage/'packaging/test-build.json').write_text(json.dumps({'testBuild':test})+'\n')
+PYTEST
+
 # Exclude generated runtime data, memory captures, and session logs.
 rm -rf "$TMP/mac2jb/vendor/ns2jb/runs"
+rm -rf "$TMP/mac2jb/vendor/ns2jb/dumps"
+rm -rf "$TMP/mac2jb/vendor/HBLauncher/runs" "$TMP/mac2jb/vendor/HBLauncher/tools" "$TMP/mac2jb/vendor/HBLauncher/dist"
 
 # A source package must not include executable kernel extensions, machine-local
 # Xcode data, or the unused unlicensed upstream USB-device example.
 rm -rf "$TMP/mac2jb/vendor/macos_usb_gadget_poc/usbgadget.kext" \
        "$TMP/mac2jb/vendor/macos_usb_gadget_poc/usb_device"
-find "$TMP/mac2jb" -type d \( -name xcuserdata -o -name project.xcworkspace \) -prune -exec rm -rf {} +
+find "$TMP/mac2jb" -type d \( -name xcuserdata -o -name project.xcworkspace -o -name __pycache__ \) -prune -exec rm -rf {} +
 
 # Remove compiled binaries and local artifacts.
 find "$TMP/mac2jb" -type f \( \
     -name '.DS_Store' -o \
     -name '._*' -o \
     -name '*.o' -o \
+    -name '*.pyc' -o \
     -name '*.dylib' -o \
     -name 'mac2jb-send' -o \
     -name 'mac2jb-commands' -o \

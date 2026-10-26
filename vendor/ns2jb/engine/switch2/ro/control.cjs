@@ -55,6 +55,8 @@ async function dispatch(context, request) {
   }
   if (command.startsWith('code-') || command.startsWith('file-') || command.startsWith('donor-'))
     return require("./files.cjs").dispatch(context, request, state, domain);
+  if (command === 'ncm-list-system')
+    return require("./ncm.cjs").listSystem(context, request, state);
   if (command.startsWith('worker-'))
     return require("./worker-control.cjs").dispatch(context, request, state, domain);
   if (command.startsWith('process-test-'))

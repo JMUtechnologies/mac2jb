@@ -17,7 +17,10 @@ fs.chmodSync(runs, 0o700);
 let child, published = false, partial = '';
 try {
   child = spawn(process.execPath, ['run.cjs', ...process.argv.slice(2)], {
-    cwd: hostDir, stdio: ['inherit', 'pipe', 'inherit']
+    cwd: hostDir, stdio: ['inherit', 'pipe', 'inherit'],
+    // Match the fork's shipped five-argument bootstrap.
+    // Holding RPC remains an explicit CLI choice through --rpc.
+    env: {...process.env, NS2_BASIC_ARITY: '5', NS2_RPC_MODE: '0'}
   });
 } catch (error) {
   console.error(error.message);
@@ -45,7 +48,12 @@ child.stdout.on('data', chunk => {
   while ((idx = partial.indexOf('\n')) >= 0) {
     const line = partial.slice(0, idx).trim();
     partial = partial.slice(idx+1);
-    if (/^V=START\(\d+(?:,\d+){8}\)$/.test(line)) publish(line);
+    const match = /^V=START\((\d+(?:,\d+){4})\)$/.exec(line);
+    if (match) {
+      const words = match[1].split(',').map(Number);
+      if (words.every(Number.isSafeInteger) && words[0] === 39380 &&
+          words.slice(1).every(value => value >= 0 && value <= 255)) publish(line);
+    }
   }
   if (partial.length > 16384) partial = partial.slice(-16384);
 });

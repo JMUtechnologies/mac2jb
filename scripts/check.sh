@@ -12,4 +12,6 @@ shasum -a 256 -c assets/bootstrap.bas.sha256
 command -v xcrun >/dev/null || { echo 'Missing Xcode command line tools.' >&2; exit 1; }
 command -v node >/dev/null || { echo 'Node.js 22+ must be installed locally; bundled code cannot replace the runtime.' >&2; exit 1; }
 node -e 'if (Number(process.versions.node.split(".")[0])<22) process.exit(1)' || { echo 'Node >=22 required' >&2; exit 1; }
+node scripts/prepare-bootstrap.cjs --check
+node scripts/prepare-homebrew-apps.cjs --check
 echo 'Bundled dependencies found. This does not verify USB device support or driver installation.'

@@ -29,26 +29,27 @@ function hidSettings(args) {
   return settings;
 }
 function emit(type, fields = {}) { process.stdout.write(JSON.stringify({type, ...fields}) + '\n'); }
-function lines(stream, callback) {
+function lines(stream, callback, limit = 65536) {
   let pending = '';
+  stream.setEncoding('utf8');
   stream.on('data', bytes => {
     pending += bytes.toString();
     let match;
     while ((match = pending.search(/[\r\n]/)) >= 0) {
       const line = pending.slice(0, match); pending = pending.slice(match + 1);
-      if (line) callback(line);
+      if (line) callback(Buffer.byteLength(line) > limit ? '[Input line exceeded its size limit]' : line);
     }
-    if (pending.length > 65536) {callback(pending.slice(0, 65536)); pending = '';}
+    if (Buffer.byteLength(pending) > limit) {callback('[Input line exceeded its size limit]'); pending = '';}
   });
   stream.on('end', () => {if (pending) callback(pending);});
 }
 function validStart(line, address) {
-  const match = /^V=START\((\d+(?:,\d+){8})\)$/.exec(line);
+  const match = /^V=START\((\d+(?:,\d+){4})\)$/.exec(line);
   if (!match) return false;
   const words = match[1].split(',').map(Number);
   return words.every(Number.isSafeInteger) && words[0] === 39380 &&
     words.slice(1, 5).every(n => n >= 0 && n <= 255) &&
-    words.slice(1, 5).join('.') === address && words.slice(5).every(n => n >= 0);
+    words.slice(1, 5).join('.') === address;
 }
 function verifiedResult(result) {
   return result?.verified === true && result?.fs?.verified === true &&
@@ -76,7 +77,10 @@ async function host(address) {
   if (fs.existsSync(active) || (() => {try {fs.lstatSync(active); return true;} catch {return false;}})())
     throw Error('This session already has a pairing record. Stop it and start a fresh session.');
   current = spawn(process.execPath, ['run.cjs', address], {
-    cwd: folder, detached: true, stdio: ['ignore', 'pipe', 'pipe']
+    cwd: folder, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+    // Match the fork's bundled five-argument bootstrap.
+    // GUI sessions finish after verification, regardless of inherited settings.
+    env: {...process.env, NS2_BASIC_ARITY: '5', NS2_RPC_MODE: '0'}
   });
   const child = current;
   let published = false, directory, publicationError;
@@ -133,7 +137,8 @@ async function hid(kind, controller, settings = timingDefaults) {
   if (controller !== 'auto' && !/^usb-drd(?:[0-9]|1[0-5])$/.test(controller)) throw Error('Choose a controller from 0 to 15.');
   const {delay, enumerationTimeout, loadWaitMs, runWaitMs, removeWaitMs, loadConfirmWaitMs} = settings;
   const candidates = controller === 'auto' ? ['usb-drd0', 'usb-drd1', 'usb-drd3'] : [controller];
-  const totalLines = fs.readFileSync(path.join(root, 'assets/bootstrap.bas'), 'utf8').split('\n').length - 1;
+  const bootstrap = fs.readFileSync(path.join(root, 'assets/bootstrap.bas'), 'utf8');
+  const totalLines = (bootstrap.match(/\n/g) || []).length + (bootstrap && !bootstrap.endsWith('\n') ? 1 : 0);
   for (const candidate of candidates) {
     if (stopping) break;
     emit('controller', {controller: candidate, message: `Waiting for ${candidate} to enumerate`});
@@ -146,7 +151,7 @@ async function hid(kind, controller, settings = timingDefaults) {
       env: {...process.env, MAC2JB_AUTO_WORKER: '1', MAC2JB_CONTROLLER: candidate,
         MAC2JB_ENUMERATION_TIMEOUT_SECONDS: String(enumerationTimeout)}});
     const child = current;
-    let output = '', typing = false, timedOut = false, announced = false, commandStep = 0, nativeEvents = false;
+    let output = '', typing = false, timedOut = false, announced = false, commandStep = 0, nativeEvents = false, nativeLineEvents = false;
     let timer, countdown;
     const started = performance.now();
     const enumerationProgress = () => {
@@ -167,6 +172,18 @@ async function hid(kind, controller, settings = timingDefaults) {
       if (line.startsWith('MAC2JB_GUI ')) {
         let event;
         try {event = JSON.parse(line.slice('MAC2JB_GUI '.length));} catch {return;}
+        if (!event || typeof event !== 'object' || Array.isArray(event)) return;
+        if (event.type === 'line-start' || event.type === 'line-complete') {
+          if (kind !== 'bootstrap' || !Number.isSafeInteger(event.line) ||
+              !Number.isSafeInteger(event.completed) || event.total !== totalLines ||
+              event.line < 1 || event.line > totalLines ||
+              event.completed !== event.line - (event.type === 'line-start' ? 1 : 0)) return;
+          nativeLineEvents = true;
+          markTyping();
+          emit(event.type, {kind, line: event.line, completed: event.completed, total: totalLines,
+            message: `${event.type === 'line-start' ? 'Typing' : 'Sent'} line ${event.line} of ${totalLines}`});
+          return;
+        }
         nativeEvents = true;
         if (['typing', 'command-start', 'command-complete'].includes(event.type)) markTyping();
         if (event.type === 'command-start' || event.type === 'command-complete') {
@@ -182,7 +199,11 @@ async function hid(kind, controller, settings = timingDefaults) {
         markTyping();
       }
       const progress = /Sent line (\d+)/.exec(line);
-      if (progress) emit('progress', {kind, completed: Number(progress[1]), total: totalLines});
+      if (progress && kind === 'bootstrap' && !nativeLineEvents) {
+        const completed = Number(progress[1]);
+        if (Number.isSafeInteger(completed) && completed >= 1 && completed <= totalLines)
+          emit('progress', {kind, line: Math.min(completed + 1, totalLines), completed, total: totalLines});
+      }
       if (line.startsWith('Sending: ')) {
         if (!nativeEvents) {
           commandStep++;
@@ -231,12 +252,13 @@ async function hid(kind, controller, settings = timingDefaults) {
   emit('failed', {message: 'No controller connected. The Mac must NOT be supplying charging power to the Switch. Unplug and replug the Mac end of a data cable to renegotiate, then verify that power is directed toward the Mac. Software cannot force the power role. You can also choose a controller manually.'}); return 1;
 }
 async function main(args = process.argv.slice(2)) {
+  if (args[0] === 'host' && args.length === 3 && args[2] === '--post-run-options')
+    return require('./gui-session.cjs').main({root, address: args[1], emit, lines, verifiedResult});
   if (args.length === 1 && args[0] === '--self-test') {
-    const crypto = require('node:crypto');
     const address = '192.0.2.1';
-    const values = Array.from({length: 4}, () => crypto.randomBytes(6).readUIntLE(0, 6));
-    const value = 'V=START(' + [39380, ...address.split('.'), ...values].join(',') + ')';
+    const value = 'V=START(' + [39380, ...address.split('.')].join(',') + ')';
     if (!validStart(value, address) || validStart(value, '192.0.2.2') ||
+        validStart(value.slice(0, -1) + ',0,0,0,0)', address) ||
         verifiedResult({verified: true}) || !verifiedResult({verified: true,
           fs: {verified: true, restored: true, cleanup: {cleanedUp: true}}}))
       throw Error('GUI adapter self-test failed.');

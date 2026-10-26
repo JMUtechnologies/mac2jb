@@ -18,7 +18,7 @@ printf '# Frozen upstream revisions (only changed by maintainer)\n' > upstream.l
 for spec in \
   'libusbd|https://github.com/shinyquagsire23/libusbd.git' \
   'macos_usb_gadget_poc|https://github.com/shinyquagsire23/macos_usb_gadget_poc.git' \
-  'ns2jb|https://gitlab.com/pepsipu/ns2jb.git'; do
+  'ns2jb|https://gitlab.com/kurumuz/ns2jb.git'; do
   name="${spec%%|*}"; url="${spec#*|}"
   echo "Fetching $name snapshot..."
   git clone --depth 1 "$url" "$work/$name"
@@ -42,7 +42,7 @@ See `usbgadget/LICENSE` and the root `vendor/README.md`.
 POCNOTE
   fi
 done
-cp vendor/ns2jb/bootstrap.bas assets/bootstrap.bas
+node scripts/prepare-bootstrap.cjs
 # Keep the original ns2jb engine and host together; run in its own folder.
 # Record an integrity fingerprint of the actual frozen text.
 shasum -a 256 assets/bootstrap.bas > assets/bootstrap.bas.sha256

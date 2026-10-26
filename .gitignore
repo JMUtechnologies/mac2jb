@@ -11,6 +11,7 @@ xcuserdata/
 
 # Per-run ns2jb session files and logs. Never commit.
 vendor/ns2jb/runs/
+vendor/ns2jb/dumps/
 
 # Python temporary files
 __pycache__/
@@ -35,3 +36,10 @@ mac2jb-active-connect.txt
 /vendor/macos_usb_gadget_poc/usbgadget.kext/
 /vendor/macos_usb_gadget_poc/usb_device/
 /vendor/macos_usb_gadget_poc/usbgadget/usbgadget.xcodeproj/xcuserdata/
+
+# Homebrew session files and generated tools.
+/vendor/HBLauncher/runs/
+/vendor/HBLauncher/tools/
+/vendor/HBLauncher/dist/
+
+/runs/

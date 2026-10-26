@@ -11,6 +11,11 @@ APP_OUTPUT="${1:-$ROOT/build/mac2jb.app}"
 [[ "$APP_OUTPUT" == *.app ]] || { echo 'Output must be an .app path.' >&2; exit 1; }
 APP_OUTPUT="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$APP_OUTPUT")"
 BUILD="$ROOT/.build-gui"
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/gui/Info.plist")"
+[[ "$APP_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+  echo 'The app version must be a stable three-part version.' >&2; exit 1;
+}
+SOURCE_ARCHIVE="$BUILD/mac2jb-$APP_VERSION-source.zip"
 NODE_BINARY="${NODE_BINARY:-/usr/local/bin/node}"
 NODE_LICENSE="$ROOT/packaging/licenses/node-v24.22.1-LICENSE.txt"
 [[ -x "$NODE_BINARY" && -f "$NODE_LICENSE" ]] || {
@@ -22,10 +27,16 @@ NODE_LICENSE="$ROOT/packaging/licenses/node-v24.22.1-LICENSE.txt"
   echo 'Node version must match the bundled v24.22.1 LICENSE and provenance.' >&2; exit 1;
 }
 mkdir -p "$BUILD"
+if ! python3 scripts/prepare-homebrew-runtime.py --check; then
+  python3 scripts/prepare-homebrew-runtime.py
+fi
 
+"$NODE_BINARY" scripts/prepare-bootstrap.cjs --check
+"$NODE_BINARY" scripts/prepare-homebrew-apps.cjs --check
 shasum -a 256 -c assets/bootstrap.bas.sha256
 bash scripts/install-driver.sh --verify
 (cd vendor/ns2jb && shasum -a 256 -c SHA256SUMS >/dev/null)
+(cd vendor/HBLauncher && shasum -a 256 -c ../../packaging/HBLauncher-v0.2.0-SHA256SUMS >/dev/null)
 # Force a fresh GUI-payload build so stale CLI artifacts cannot retain the
 # builder's newer default deployment target. The regular CLI defaults stay as-is.
 MACOSX_DEPLOYMENT_TARGET=14.0 make -B
@@ -60,6 +71,7 @@ while IFS= read -r dependency; do
   esac
 done < <(otool -L "$PAYLOAD/node" | tail -n +2 | awk '{print $1}')
 cp "$NODE_LICENSE" "$PAYLOAD/licenses/node-LICENSE.txt"
+cp -R "$BUILD/homebrew" "$PAYLOAD/homebrew"
 chmod 700 "$PAYLOAD/node" "$PAYLOAD/mac2jb-send" "$PAYLOAD/mac2jb-commands"
 python3 - "$PAYLOAD" <<'PY'
 import re, subprocess, sys
@@ -80,19 +92,27 @@ PY
 # session directories, logs, Git metadata, or Xcode user state. Only the tested
 # driver under drivers/ is allowed; vendor prebuilt kexts remain excluded.
 python3 - "$ROOT" "$PAYLOAD" "$NODE_BINARY" <<'PY'
-import hashlib, json, shutil, sys
+import hashlib, json, plistlib, shutil, sys
 from pathlib import Path
 root, payload, node = map(Path, sys.argv[1:])
 source = payload / 'source'
 source.mkdir()
+test_build = plistlib.loads((root/'gui/Info.plist').read_bytes()).get('MAC2JBTestBuild') is True
+marker = json.dumps({'testBuild': test_build}, indent=2)+'\n'
+(payload/'packaging').mkdir(parents=True, exist_ok=True)
+(source/'packaging').mkdir(parents=True, exist_ok=True)
+(payload/'packaging/test-build.json').write_text(marker)
+(source/'packaging/test-build.json').write_text(marker)
 files = ['README.md', 'LICENSE', '.gitignore', 'Makefile', 'sender.c', 'commands.c',
          'indent-test.bas', 'upstream.lock', 'mac2jb.command', 'setup.sh',
          'fetch-bootstrap.sh', 'make-release-zip.command']
-folders = ['gui', 'scripts', 'packaging', 'docs', 'drivers', 'assets', 'vendor', '.github']
-blocked = {'.git', 'runs', '__pycache__', 'xcuserdata', 'project.xcworkspace',
+folders = ['gui', 'scripts', 'packaging', 'docs', 'drivers', 'assets', 'vendor', 'stremio', '.github']
+blocked = {'.git', 'runs', 'dumps', '__pycache__', 'xcuserdata', 'project.xcworkspace',
            'usb_device', '.DS_Store'}
 suffixes = {'.o', '.dylib', '.log', '.pyc', '.bak', '.xcuserstate'}
 def safe(path):
+    if path.parts[-2:] == ('packaging','test-build.json'): return False
+    if path.parts[:2] == ('vendor', 'HBLauncher') and len(path.parts)>2 and path.parts[2] in ('tools', 'dist'): return False
     if 'usbgadget.kext' in path.parts and 'drivers' not in path.parts: return False
     return (not any(part in blocked or part.startswith('._') for part in path.parts)
             and path.suffix not in suffixes and not path.is_symlink())
@@ -106,9 +126,13 @@ for name in files:
 for name in folders:
     if (root/name).exists():
         for src in sorted((root/name).rglob('*')): copy(src, source/src.relative_to(root))
-for name in ['vendor/ns2jb', 'assets', 'drivers']:
+for name in ['vendor/ns2jb', 'vendor/HBLauncher', 'assets', 'drivers', 'stremio']:
     for src in sorted((root/name).rglob('*')): copy(src, payload/src.relative_to(root))
-for name in ['scripts/gui-host.cjs', 'scripts/install-driver.sh', 'packaging/NOTICE.md']:
+for name in ['scripts/gui-host.cjs', 'scripts/gui-session.cjs', 'scripts/gui-dump.cjs',
+             'scripts/gui-homebrew.cjs', 'scripts/gui-stremio.cjs', 'scripts/check-homebrew-runtime.cjs',
+             'scripts/prepare-homebrew-apps.cjs', 'scripts/check-stremio-runtime.cjs',
+             'packaging/stremio-display-SHA256SUMS', 'packaging/stremio-sample-provenance.json',
+             'scripts/install-driver.sh', 'packaging/NOTICE.md']:
     if not (root/name).is_file(): raise SystemExit('Missing GUI build input: '+name)
     copy(root/name, payload/name)
 provenance = {
@@ -123,10 +147,13 @@ provenance = {
 (payload/'licenses/node-provenance.json').write_text(json.dumps(provenance, indent=2)+'\n')
 PY
 
-python3 - "$PAYLOAD" "$BUILD" <<'PY'
+# Add released apps after copying the frozen HBLauncher tree.
+"$NODE_BINARY" scripts/prepare-homebrew-apps.cjs --install "$PAYLOAD/vendor/HBLauncher/apps"
+
+python3 - "$PAYLOAD" "$BUILD" "$SOURCE_ARCHIVE" <<'PY'
 import gzip, hashlib, json, os, sys, tarfile, zipfile
 from pathlib import Path
-payload, build = map(Path, sys.argv[1:])
+payload, build, source_archive = map(Path, sys.argv[1:])
 archive = build/'runtime.tar.gz'
 with archive.open('wb') as stream, gzip.GzipFile(filename='', mode='wb', fileobj=stream, mtime=0) as gz:
     with tarfile.open(fileobj=gz, mode='w', format=tarfile.USTAR_FORMAT) as tar:
@@ -135,14 +162,16 @@ with archive.open('wb') as stream, gzip.GzipFile(filename='', mode='wb', fileobj
             if path.is_symlink(): raise SystemExit('Refusing archive symlink: '+relative)
             entry = tar.gettarinfo(str(path), arcname=relative)
             entry.uid = entry.gid = 0; entry.uname = entry.gname = ''; entry.mtime = 0
-            entry.mode = 0o700 if path.is_dir() or relative in ('node','mac2jb-send','mac2jb-commands') else 0o600
+            entry.mode = 0o700 if path.is_dir() or relative in (
+                'node','mac2jb-send','mac2jb-commands', 'homebrew/bin/spirv-val',
+                'homebrew/python/bin/python3', 'homebrew/python/bin/python3.13') else 0o600
             if path.is_file():
                 with path.open('rb') as file: tar.addfile(entry, file)
             elif path.is_dir(): tar.addfile(entry)
             else: raise SystemExit('Unsupported archive file: '+relative)
 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 (build/'PayloadMetadata.swift').write_text('enum EmbeddedPayloadMetadata { static let sha256 = '+json.dumps(digest)+' }\n')
-with zipfile.ZipFile(build/'mac2jb-0.3.2-source.zip', 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
+with zipfile.ZipFile(source_archive, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
     for path in sorted((payload/'source').rglob('*')):
         if path.is_file(): zipped.write(path, 'mac2jb/'+path.relative_to(payload/'source').as_posix())
 print('Embedded runtime SHA-256:', digest)
@@ -167,4 +196,4 @@ mkdir -p "$(dirname "$APP_OUTPUT")"
 if [[ -e "$APP_OUTPUT" ]]; then rm -rf "$APP_OUTPUT"; fi
 mv "$STAGE/mac2jb.app" "$APP_OUTPUT"
 echo "Created GUI app: $APP_OUTPUT"
-echo "Corresponding source: $BUILD/mac2jb-0.3.2-source.zip"
+echo "Corresponding source: $SOURCE_ARCHIVE"

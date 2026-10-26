@@ -5,12 +5,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const crypto = require('node:crypto');
 const {spawn} = require('node:child_process');
 const {validStart, verifiedResult, hidSettings} = require('./gui-host.cjs');
 function command(address = '192.0.2.1') {
-  // Exercise a fresh command for every test run.
-  return 'V=START(' + [39380, ...address.split('.'), ...Array.from({length: 4}, () => crypto.randomInt(1, 1000000))].join(',') + ')';
+  return 'V=START(' + [39380, ...address.split('.')].join(',') + ')';
 }
 function fixture(t, sender, host) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mac2jb-gui-test-'));
@@ -25,21 +23,34 @@ function fixture(t, sender, host) {
   if (host) fs.writeFileSync(path.join(root, 'vendor/ns2jb/run.cjs'), host);
   return root;
 }
-function run(root, args) {
-  const child = spawn(process.execPath, [path.join(root, 'scripts/gui-host.cjs'), ...args], {stdio: ['ignore', 'pipe', 'pipe']});
+function run(root, args, env = {}) {
+  const child = spawn(process.execPath, [path.join(root, 'scripts/gui-host.cjs'), ...args], {
+    stdio: ['ignore', 'pipe', 'pipe'], env: {...process.env, ...env}
+  });
   let output = '', error = '';
   child.stdout.on('data', bytes => {output += bytes;});
   child.stderr.on('data', bytes => {error += bytes;});
   const done = new Promise((resolve, reject) => {
     child.on('error', reject); child.on('close', code => resolve({code, output, error, events: output.trim().split('\n').filter(Boolean).map(JSON.parse)}));
   });
-  return {child, done};
+  return {child, done, events: () => output.split('\n').slice(0, -1).filter(Boolean).map(JSON.parse)};
+}
+async function until(predicate, message) {
+  const started = performance.now();
+  while (!predicate()) {
+    assert.ok(performance.now() - started < 2500, message);
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
 }
 test('pairing validation requires the expected address and complete command', () => {
   const value = command();
   assert.equal(validStart(value, '192.0.2.1'), true);
   assert.equal(validStart(value, '192.0.2.2'), false);
   assert.equal(validStart(value + 'garbage', '192.0.2.1'), false);
+  for (const invalid of ['V=START(39380,192,0,2,1,0,0,0,0)', 'V=START(39380,192,0,2)',
+    'V=START(39381,192,0,2,1)', 'V=START(39380,256,0,2,1)', 'V=START(39380,-1,0,2,1)',
+    'V=START(39380,192,0,2,1.5)', 'V=START(39380,192,0,2,1);PRINT 1'])
+    assert.equal(validStart(invalid, '192.0.2.1'), false, invalid);
 });
 test('success requires independent FS verification, restoration and cleanup', () => {
   assert.equal(verifiedResult({verified: true}), false);
@@ -72,6 +83,61 @@ test('a partial transfer never probes another controller', async t => {
   assert.equal(result.events.filter(e => e.type === 'controller').length, 1);
   assert.ok(result.events.some(e => e.type === 'failed' && e.partial === true));
 });
+test('fragmented native line events show the current line before its completion', {timeout: 8000}, async t => {
+  const root = fixture(t, `
+    const fs = require('fs');
+    const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const event = value => console.log('MAC2JB_GUI ' + JSON.stringify(value));
+    (async () => {
+      event({type:'line-start',line:0,completed:0,total:3});
+      event({type:'line-start',line:1,completed:1,total:3});
+      process.stdout.write('MAC2JB_GUI {"type":"line-');
+      await pause(25);
+      process.stdout.write('start","line":1,"completed":0,"total":3}\\n');
+      console.log('Sent line 3'); // Legacy output must not override native state.
+      while (!fs.existsSync('complete-first')) await pause(10);
+      event({type:'line-complete',line:1,completed:1,total:3});
+      event({type:'line-start',line:2,completed:1,total:3});
+      while (!fs.existsSync('stop-second')) await pause(10);
+      console.error('Transfer stopped midway through line 2'); process.exitCode = 1;
+    })();
+  `);
+  fs.writeFileSync(path.join(root, 'assets/bootstrap.bas'), 'PRINT 1\nPRINT 2\nPRINT 3\n');
+  const runner = run(root, ['hid', 'bootstrap', 'auto', '50', '--enumeration-timeout', '1']);
+  t.after(async () => {runner.child.kill('SIGTERM'); await runner.done;});
+  await until(() => runner.events().some(e => e.type === 'line-start'), 'Current line was not published while the sender paused');
+  const first = runner.events().find(e => e.type === 'line-start');
+  assert.deepEqual(first, {type: 'line-start', kind: 'bootstrap', line: 1, completed: 0, total: 3,
+    message: 'Typing line 1 of 3'});
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(runner.events().filter(e => e.type === 'controller').length, 1);
+  assert.equal(runner.events().some(e => e.type === 'line-complete' || e.type === 'progress'), false);
+  assert.equal(runner.events().some(e => e.type === 'transfer-complete'), false);
+  const typing = runner.events().findIndex(e => e.type === 'typing');
+  assert.ok(typing >= 0);
+  assert.equal(runner.events().slice(typing + 1).some(e => e.type === 'enumeration-progress'), false);
+  fs.writeFileSync(path.join(root, 'complete-first'), '');
+  await until(() => runner.events().some(e => e.type === 'line-start' && e.line === 2), 'Second current line was not published');
+  assert.deepEqual(runner.events().filter(e => e.type === 'line-complete').map(e => e.completed), [1]);
+  fs.writeFileSync(path.join(root, 'stop-second'), '');
+  const result = await runner.done;
+  assert.equal(result.code, 1, result.error);
+  assert.equal(result.events.filter(e => e.type === 'line-start').length, 2);
+  assert.deepEqual(result.events.filter(e => e.type === 'line-complete').map(e => e.completed), [1]);
+  assert.equal(result.events.find(e => e.type === 'line-complete').message, 'Sent line 1 of 3');
+  assert.equal(result.events.some(e => e.type === 'progress'), false);
+  assert.ok(result.events.some(e => e.type === 'failed' && e.partial));
+});
+test('legacy line progress stays within source bounds and includes the final unterminated line', async t => {
+  const root = fixture(t, `console.log('Sent line 1'); console.log('Sent line 2'); console.log('Sent line 99');`);
+  fs.writeFileSync(path.join(root, 'assets/bootstrap.bas'), 'PRINT 1\r\nPRINT 2');
+  const result = await run(root, ['hid', 'bootstrap', 'usb-drd0']).done;
+  assert.equal(result.code, 0, result.error);
+  assert.deepEqual(result.events.filter(e => e.type === 'progress'), [
+    {type: 'progress', kind: 'bootstrap', line: 2, completed: 1, total: 2},
+    {type: 'progress', kind: 'bootstrap', line: 2, completed: 2, total: 2}
+  ]);
+});
 test('typing evidence arriving during timeout shutdown prevents retry', {timeout: 10000}, async t => {
   const root = fixture(t, `
     process.on('SIGTERM', () => {console.log('Keyboard enumerated. Sending...'); process.exitCode = 1; clearInterval(timer);});
@@ -98,6 +164,21 @@ test('host preserves the full pairing output and accepts verified result', async
   assert.ok(result.events.some(e => e.type === 'verified'));
   assert.equal(fs.existsSync(path.join(root, 'vendor/ns2jb/runs/mac2jb-active-connect.txt')), false);
   assert.equal(fs.statSync(path.join(root, 'vendor/ns2jb/runs')).mode & 0o777, 0o700);
+});
+test('GUI host fixes bootstrap arity and disables inherited held RPC mode', async t => {
+  const pairing = 'V=START(39380,192,0,2,1)';
+  const root = fixture(t, undefined, `
+    const fs = require('fs'); const path = require('path');
+    fs.writeFileSync(path.join(__dirname, 'host-settings.json'), JSON.stringify({
+      arity: process.env.NS2_BASIC_ARITY, rpc: process.env.NS2_RPC_MODE,
+      args: process.argv.slice(2)
+    }));
+    console.log(${JSON.stringify(pairing)});
+  `);
+  const result = await run(root, ['host', '192.0.2.1'], {NS2_BASIC_ARITY: '9', NS2_RPC_MODE: '1'}).done;
+  const settings = JSON.parse(fs.readFileSync(path.join(root, 'vendor/ns2jb/host-settings.json')));
+  assert.deepEqual(settings, {arity: '5', rpc: '0', args: ['192.0.2.1']});
+  assert.ok(result.events.some(e => e.type === 'host-ready'));
 });
 test('USB command and failure output preserve the full pairing command', async t => {
   const pairing = command();

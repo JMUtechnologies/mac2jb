@@ -8,6 +8,12 @@ const {read, save, local, hash} = runtime;
 const check = (ok, message) => {if (!ok) throw Error(message);};
 
 async function main() {
+  const flags = process.argv.slice(2);
+  check(flags.length <= 2 && flags.every(flag => ['--dump-firmware', '--hold-rpc'].includes(flag)) &&
+    new Set(flags).size === flags.length, 'Usage: pipeline.cjs [--dump-firmware] [--hold-rpc]');
+  const dumpFirmware = flags.includes('--dump-firmware');
+  const holdRpc = flags.includes('--hold-rpc');
+  check(!holdRpc || typeof process.send === 'function', 'Held FS mode requires runner IPC');
   const file = path.join(__dirname, 'pipeline.json');
   const record = {session: a.session, started: new Date().toISOString(), stages: []};
   await fs.writeFile(file, JSON.stringify(record) + '\n', {flag: 'wx', mode: 0o600});
@@ -28,7 +34,7 @@ async function main() {
     console.log('1/4 Checking the console');
     await script('app', 'map');
     await script('app', 'inspect-mounts');
-    await stage('Remove recorded scratch from prior launches', () => require('./cleanup-scratch.cjs').main());
+    await stage('Remove exploit scratch from prior launches', () => require('./cleanup-scratch.cjs').main());
     const app = await script('app', 'qualify');
     check(app.verified && app.cleanedUp, 'Application worker qualification failed');
     console.log('2/4 Acquiring FS memory');
@@ -38,6 +44,7 @@ async function main() {
     });
     console.log('3/4 Starting the native helper');
     const captured = await read(acquisition.report);
+    await new Promise(resolve => setTimeout(resolve, 2000));
     if (!captured.retainedMemory?.captures?.some(c => c.length === 0x4d8000))
       await script('retained', 'find-metadata', [acquisition.supervisorReport]);
     await script('ro', 'install-retained');
@@ -75,18 +82,38 @@ async function main() {
     await save(runtime.executionFile, {verified: true, session: a.session, report: acquisition.report,
       pid: proof.pid, programId: '0400000000000037', payloadSha256: payload.sha256,
       proof: proof.file, launch: launch.file, identity: activation.file, handoff: handoff.file});
-    console.log('4/4 Running the FS demo and cleaning up');
+    console.log('4/4 Running the FS demo');
     await script('process', 'bind-notifier');
     const mapping = await script('process', 'qualify');
     check(mapping.verified && mapping.cleanup?.finished, 'Native process mapping did not qualify and clean up');
     const execution = await stage('FS instruction challenges', () => require('./process/fs-execute.cjs').main());
     check(execution.verified && execution.restored, 'FS execution or restoration did not verify');
-    const cleanup = await stage('Release FS resources', async () => {
+    if (dumpFirmware) {
+      console.log('Firmware: beginning read-only system-program CodeFS capture');
+      record.firmwareDump = await stage('Enumerate and capture installed system code',
+        () => require('./firmware-dump.cjs').main(execution.file));
+    }
+    const donorCleanup = await stage('Remove RO donor files', async () => {
       const memory = await connect();
       const donor = await memory.request({command: 'root-native-donor-cleanup'});
       check(donor.cleanedUp, 'Donor files did not clean up');
-      return {...await acquisition.retire(), donor};
+      return donor;
     });
+    if (holdRpc) {
+      const held = {...execution, cleanup: {deferred: true, donor: donorCleanup},
+        retainedEndpoint: {ready: true, session: a.session, socketPath: acquisition.socketPath},
+        started: record.started};
+      await save(path.join(__dirname, 'fs-execution-current.json'), held);
+      record.hold = {state: 'ready', started: new Date().toISOString()};
+      await save(file, record);
+      const release = require('./hold.cjs').waitForRelease();
+      process.send({type: 'held-ready', session: a.session});
+      const reason = await release;
+      record.hold = {...record.hold, state: 'releasing', reason, released: new Date().toISOString()};
+      await save(file, record);
+    }
+    const cleanup = await stage('Release FS resources', async () =>
+      ({...await acquisition.retire(), donor: donorCleanup}));
     const result = {...execution, cleanup, started: record.started, completed: new Date().toISOString()};
     await save(path.join(__dirname, 'fs-execution-current.json'), result);
     record.verified = true; record.result = result;

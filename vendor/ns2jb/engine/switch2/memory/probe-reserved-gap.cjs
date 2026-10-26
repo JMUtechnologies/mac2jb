@@ -16,7 +16,8 @@ async function main() {
   // Fixed geometry and bounded attempts from the Switch 2 hardware run.
   const probeReadSize = 0x180000, markerOffset = 0x2340;
   const trialRange = 0x600000, cacheReadSize = 0x200000, fragmentCount = 16;
-  const minimumCacheHeld = 0x2810, metadataAttempts = 2, fieldCopies = 2;
+  const minimumCacheHeld = 0x2810, metadataAttempts = 4, fieldCopies = 2;
+  const waveAttempts = 30;
   const plannerCycle = 0x28000;
   const canonicalPlanner = require('./cache-address-plan.cjs');
   const addressPlanner = (target, size) => require('./signed-cache-plan.cjs').plan(target, size, plannerCycle);
@@ -50,7 +51,7 @@ async function main() {
   const tailInputs = Array.from({length: 4}, (_, i) => b + 0x32000 + i * 0x2000);
   const report = {session: live.session, scratch, canary, extent, markerOffset,
     probeReadSize, trialRange, cacheReadSize, fragmentCount, minimumCacheHeld,
-    metadataAttempts, fieldCopies, plannerCycle,
+    metadataAttempts, fieldCopies, waveAttempts, plannerCycle,
     started: new Date().toISOString(), cases: []};
   let saved, temporary, root, fileHandle, group, pinHandle, candidateHandle, originalRom, released = false;
   let cacheNeedsRestore = false, restoreCandidate;
@@ -199,7 +200,17 @@ async function main() {
     }
     for (const [name, handle, bytes] of [['save', saved, writeSize + 0x400000], ['tmp', temporary, 0x10000]]) {
       const space = await normal(handle, 11, '/');
-      check(!space.result && space.data.readBigUInt64LE() > BigInt(bytes), 'Insufficient ' + name + ' space');
+      const free = space.result ? 0n : space.data.readBigUInt64LE();
+      (report.freeSpace ||= {})[name] = {result: space.result, bytes: free.toString(), required: bytes};
+      if (name === 'tmp' && !space.result && free < BigInt(bytes)) {
+        // A low-space result does not establish that our own scratch remains.
+        // Inventory the root read-only before deciding what, if anything, is safe to remove.
+        try { report.tmpRootEntries = await require(path.join(directory, 'filesystem.cjs')).listDirectory(s, handle, '/'); }
+        catch (error) { report.tmpRootReadError = error.message; }
+        await save();
+      }
+      check(!space.result && (name === 'tmp' ? free >= BigInt(bytes) : free > BigInt(bytes)),
+        'Insufficient ' + name + ' space');
       check((await normal(handle, 7, scratch)).canonicalResult === 0x202, 'Scratch already exists');
       check(!(await normal(handle, 2, scratch)).result, 'Scratch creation failed');
       created.push({name, handle, path: scratch});
@@ -499,7 +510,7 @@ async function main() {
       row.preReleaseUsed >= 0x2600;
     async function retryWave(profile) {
       let row;
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < waveAttempts; attempt++) {
         row = await wave(profile, probeReadSize);
         if (!hasWindow(row)) continue;
         if (profile === 'extent-present' && !row.selectedMarker) continue;
@@ -605,10 +616,18 @@ async function main() {
             bytes.write('/..\\');
             tail.copy(bytes, markerOffset);
             bytes[bytes.length - 1] = 0;
-            for (let batch = 0; ; batch++) {
-              let confirmed = 0;
-              for (let attempt = 0; attempt < requiredCopies * 3 && confirmed < requiredCopies; attempt++) {
+            for (let batch = 0; batch < 3; batch++) {
+              let confirmed = 0, attempts = 0, bestMargin = -Infinity, aborted = 0, misses = 0;
+              const guards = {completed: 0, earlyHole: 0, minimumSpacing: 0};
+              for (let attempt = 0; attempt < requiredCopies * 20 && confirmed < requiredCopies; attempt++) {
                 const row = await wave('cache-' + name + '-' + batch + '-' + attempt, qualified, bytes);
+                attempts++;
+                if (Number.isFinite(row.receiveOrderMarginUs)) bestMargin = Math.max(bestMargin, row.receiveOrderMarginUs);
+                if (row.triggerAborted) {
+                  aborted++;
+                  for (const key of Object.keys(guards)) if (row.nativeGuard?.[key]) guards[key]++;
+                }
+                if (row.changedPaths.length) misses++;
                 // Every retry writes the same prefix. An aborted copy or a
                 // known path-canary miss is not evidence against an earlier
                 // accepted window. Count accepted windows without requiring
@@ -618,7 +637,18 @@ async function main() {
               }
               if (confirmed === requiredCopies) break;
               check(runControl.state.mode !== 'retiring', 'Cleanup field copies did not retain the required receive order');
-              throw Error('Field copy did not qualify within its attempt limit: ' + name);
+              if (batch < 2) {
+                console.log(JSON.stringify({stage: 'field-copy-retry', name, batch, confirmed,
+                  required: requiredCopies, attempts}));
+                continue;
+              }
+              throw Error('Field copy did not qualify within its attempt limit: ' + name +
+                ' [batch ' + batch + ', accepted ' + confirmed + '/' + requiredCopies +
+                ', attempts ' + attempts + ', best margin ' +
+                (Number.isFinite(bestMargin) ? bestMargin.toFixed(0) : 'none') + ' us (needs 300)' +
+                ', native aborts ' + aborted + ' [completed ' + guards.completed +
+                ', earlyHole ' + guards.earlyHole + ', minimumSpacing ' + guards.minimumSpacing + ']' +
+                ', canary misses ' + misses + ']');
             }
           }
           async function setAliasOffset(name) {

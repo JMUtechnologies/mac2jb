@@ -15,13 +15,16 @@ private struct GUIEvent: Decodable {
     let message: String?
     let kind: String?
     let path: String?
+    let rpcCommand: String?
     let completed: Double?
     let total: Double?
     let partial: Bool?
     let step: Int?
+    let line: Int?
     let label: String?
     let remainingMs: Double?
     let durationMs: Double?
+    let watchProgress: StremioWatchProgress?
 }
 
 @MainActor final class SessionModel: ObservableObject {
@@ -40,9 +43,9 @@ private struct GUIEvent: Decodable {
     @Published var addresses: [NetworkAddress] = []
     @Published var selectedAddress = ""
     @Published var controller = "auto"
-    @Published var fullInstall = true {
-        didSet { workflowProgress.selectMode(fullInstall: fullInstall) }
-    }
+    @Published private(set) var runMode: SessionRunMode = .exploitOnly
+    @Published private(set) var activeRunMode: SessionRunMode = .exploitOnly
+    var fullInstall: Bool { runMode == .bootstrapOnly }
     @Published var keyDelayMs = 50
     @Published var enumerationTimeoutSeconds = 4
     @Published var loadWaitMs = 3000
@@ -55,9 +58,23 @@ private struct GUIEvent: Decodable {
     @Published var driverSetupRunning = false
     @Published var error: String?
     @Published private(set) var diagnosticLogURL: URL?
+    @Published private(set) var postRun = PostRunSessionState()
+    @Published private(set) var rpcCommand = ""
+    @Published private(set) var rpcStatus = ""
+    @Published private(set) var dumpFolder: URL?
+    @Published private(set) var homebrewMessage = ""
+    @Published private(set) var homebrewFolder: URL?
+    @Published private(set) var homebrewTitle = "HBLauncher v0.2.0"
+    @Published var stremioAddonURL = ""
+    var accountProgressHandler: ((StremioWatchProgress) -> Void)?
+    var stremioToolsAvailable: Bool {
+        FileManager.default.isExecutableFile(atPath: "/Applications/Stremio.app/Contents/MacOS/ffmpeg") &&
+        FileManager.default.isExecutableFile(atPath: "/Applications/Stremio.app/Contents/MacOS/ffprobe")
+    }
     private(set) var runtime: BundledRuntime?
-    private var hostProcess: Process?
-    private var hidProcess: Process?
+    @Published private var hostProcess: Process?
+    private var hostInput: Pipe?
+    @Published private var hidProcess: Process?
     private var preparing = false
     private var hostCompleted = false
     private var generation = UUID()
@@ -73,7 +90,29 @@ private struct GUIEvent: Decodable {
     private var hasEnumeratedSuccessfully = false
 
     var isBusy: Bool {
-        [.preparing, .bootstrap, .hostStarting, .commands, .waitingForConsole].contains(phase)
+        [.preparing, .bootstrap, .hostStarting, .commands, .waitingForConsole,
+         .rpcHeld, .dumpingFirmware, .rpcFinishing, .launchingHomebrew, .homebrewRunning, .homebrewStopped].contains(phase)
+    }
+
+    var hasLiveWorkers: Bool { hostProcess != nil || hidProcess != nil }
+    var canLaunchHomebrew: Bool {
+        phase == .rpcHeld && activeRunMode == .heldRPC && postRun.canLaunchHomebrew &&
+        hostProcess?.isRunning == true && hostInput != nil && runFolder != nil
+    }
+    var canReturnToStart: Bool { phase == .verified && !hasLiveWorkers && !driverSetupRunning }
+
+    func returnToStart() {
+        guard canReturnToStart else { return }
+        endSessionActivity()
+        phase = .ready; status = "Ready for a fresh session"
+        detail = "Restart the console before another exploit attempt, then choose your next run mode."
+        progress = nil; progressLabel = ""; error = nil
+    }
+
+    func selectRunMode(_ mode: SessionRunMode) {
+        guard !isBusy, phase != .awaitingSave, !hasLiveWorkers, !driverSetupRunning else { return }
+        runMode = mode
+        workflowProgress.selectMode(fullInstall: mode == .bootstrapOnly)
     }
 
     var canRestartForUpdate: Bool {
@@ -147,16 +186,19 @@ private struct GUIEvent: Decodable {
         guard !driverSetupRunning else { return }
         guard !isBusy, phase != .awaitingSave, hostProcess == nil, hidProcess == nil, let runtime else { return }
         guard driverLoaded else { fail("Install/load the USB driver, complete any required restart, then refresh the driver check."); return }
-        guard Self.isIPv4(selectedAddress), addresses.contains(where: { $0.address == selectedAddress }) else {
-            fail("Choose a current LAN IPv4 address for this Mac, then refresh checks.")
-            return
+        if runMode.requiresHost {
+            guard Self.isIPv4(selectedAddress), addresses.contains(where: { $0.address == selectedAddress }) else {
+                fail("Choose a current LAN IPv4 address for this Mac, then refresh checks.")
+                return
+            }
         }
         guard (1...2000).contains(keyDelayMs), (1...120).contains(enumerationTimeoutSeconds),
               [loadWaitMs, runWaitMs, removeWaitMs, loadConfirmWaitMs].allSatisfy({ (0...120000).contains($0) }) else {
             fail("Use 1–2000 ms per key, 1–120 seconds for enumeration, and 0–120000 ms for each command wait.")
             return
         }
-        workflowProgress.begin(fullInstall: fullInstall)
+        activeRunMode = runMode
+        workflowProgress.begin(fullInstall: activeRunMode == .bootstrapOnly)
         // Keep the Mac awake through typing, the save checkpoint, and host
         // verification. This assertion is scoped to this session only.
         endSessionActivity()
@@ -165,25 +207,31 @@ private struct GUIEvent: Decodable {
             reason: "Completing the mac2jb USB and console session")
         generation = UUID()
         error = nil; progress = nil; progressLabel = ""; isEnumerating = false; hostCompleted = false; runFolder = nil
+        postRun = PostRunSessionState(); rpcCommand = ""; rpcStatus = ""; dumpFolder = nil
+        homebrewMessage = ""; homebrewFolder = nil; homebrewTitle = "HBLauncher v0.2.0"
         hasEnumeratedSuccessfully = false
         resetBootstrapTiming()
         hostStageLabel = "Waiting for the Switch to connect over the local network"
         hostStageProgress = nil
-        append("mac2jb 0.3.2; controller=\(controller); address=\(selectedAddress); keyDelayMs=\(keyDelayMs); enumerationTimeoutSeconds=\(enumerationTimeoutSeconds); loadConfirmWaitMs=\(loadConfirmWaitMs); loadWaitMs=\(loadWaitMs); runWaitMs=\(runWaitMs); removeWaitMs=\(removeWaitMs). Starting a fresh \(fullInstall ? "full bootstrap" : "post-bootstrap") workflow.")
-        if fullInstall { startHID("bootstrap", root: runtime.root) }
+        append("\(AppBuildIdentity.diagnosticLabel); mode=\(activeRunMode.rawValue); controller=\(controller); address=\(selectedAddress); keyDelayMs=\(keyDelayMs); enumerationTimeoutSeconds=\(enumerationTimeoutSeconds); loadConfirmWaitMs=\(loadConfirmWaitMs); loadWaitMs=\(loadWaitMs); runWaitMs=\(runWaitMs); removeWaitMs=\(removeWaitMs). Starting \(activeRunMode.title).")
+        if activeRunMode == .bootstrapOnly { startHID("bootstrap", root: runtime.root) }
         else { startHost(root: runtime.root) }
     }
 
-    func confirmSavedAndDirectMode() {
-        guard phase == .awaitingSave, let runtime else { return }
-        workflowProgress.confirmSavedAndStartHost()
-        startHost(root: runtime.root)
+    func finishBootstrapOnly() {
+        guard phase == .awaitingSave, activeRunMode == .bootstrapOnly, !hasLiveWorkers else { return }
+        workflowProgress.bootstrapOnlySaved()
+        endSessionActivity()
+        phase = .ready; status = "Bootstrap saved"
+        detail = "NS2 is saved in slot 0. Choose an exploit mode when you are ready to start a fresh console session."
+        progress = nil; progressLabel = ""
+        append("Bootstrap-only workflow finished after the save checkpoint. No host was started.")
     }
 
     func cancel() {
         // Quit also calls cancel, so release the assertion even if the phase
         // has already moved to a terminal state.
-        endSessionActivity()
+        if hostProcess == nil { endSessionActivity() }
         guard isBusy || phase == .awaitingSave else { return }
         // Remember the active step before replacing its phase with cancelled.
         let recovery = SessionRecovery.message("Session stopped.", interruptedPhase: phase)
@@ -192,6 +240,7 @@ private struct GUIEvent: Decodable {
         phase = .cancelled; progress = nil; progressLabel = ""; isEnumerating = false
         status = "Session stopped"
         error = nil
+        postRun.stop()
         append("Stop requested. Only this app’s worker processes are being stopped.")
         appendBootstrapDuration(outcome: "cancelled")
         stopWorkers()
@@ -202,16 +251,125 @@ private struct GUIEvent: Decodable {
         NSWorkspace.shared.open(folder)
     }
 
+    func revealRunFolder() {
+        if let folder = runFolder ?? runtime?.root { NSWorkspace.shared.open(folder) }
+    }
+
+    func revealDumpFolder() { if let dumpFolder { NSWorkspace.shared.open(dumpFolder) } }
+
+    func revealHomebrewLogs() {
+        if let folder = homebrewFolder ?? runFolder { NSWorkspace.shared.open(folder) }
+    }
+
+    func launchHomebrew(stremio: Bool = false,
+                        accountAddons: [String] = [], libraryItems: [[String: Any]] = []) {
+        guard canLaunchHomebrew, !stremio || stremioToolsAvailable else { return }
+        var control: [String: Any] = ["action": stremio ? "launch-stremio" : "launch-hblauncher"]
+        if stremio {
+            let value = stremioAddonURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard accountAddons.count <= 32, libraryItems.count <= 500 else { return }
+            control["addonUrls"] = value.isEmpty ? accountAddons : [value]
+            control["libraryItems"] = libraryItems
+        }
+        guard sendHostControl(control) else { return }
+        homebrewTitle = stremio ? "Stremio · experimental" : "HBLauncher v0.2.0"
+        postRun.launchHomebrew()
+        homebrewMessage = "Starting \(homebrewTitle) in the current held session…"
+        presentPostRunState()
+    }
+
+    func copyRPCCommand() {
+        guard !rpcCommand.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(rpcCommand, forType: .string)
+    }
+
+    func finishPostRun() {
+        guard postRun.canFinish, sendHostControl(["action": "finish"]) else { return }
+        postRun.finish()
+        presentPostRunState()
+    }
+
+    func checkRPCStatus() {
+        guard postRun.canCheckStatus, sendHostControl(["action": "rpc-status"]) else { return }
+        postRun.checkStatus(); rpcStatus = "Checking RPC…"
+    }
+
+    private func sendHostControl(_ value: [String: Any]) -> Bool {
+        guard let hostProcess, hostProcess.isRunning, let hostInput else {
+            fail("The live host is no longer available. Keep the logs and restart the console before another attempt.")
+            return false
+        }
+        do {
+            var data = try JSONSerialization.data(withJSONObject: value)
+            guard data.count <= 4 * 1024 * 1024 else {
+                fail("The player configuration is too large. Reduce the imported library or add-on configuration.")
+                return false
+            }
+            data.append(10)
+            try hostInput.fileHandleForWriting.write(contentsOf: data)
+            return true
+        } catch {
+            fail("Could not send the session action to the host: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func presentPostRunState() {
+        isEnumerating = false
+        switch postRun.stage {
+        case .held:
+            switch postRun.homebrewStage {
+            case .idle:
+                phase = .rpcHeld; status = "RPC is open"
+                detail = "Keep SmileBASIC open and the computer awake. Finish the session to release the live endpoint and verify cleanup."
+                progress = 1; progressLabel = "4/4 verified · original instructions restored · RPC held"
+            case .launching:
+                phase = .launchingHomebrew; status = "Starting \(homebrewTitle)"
+                detail = "This app uses the current verified held RPC session. Keep SmileBASIC open while it starts."
+                progress = nil; progressLabel = homebrewMessage
+            case .running:
+                phase = .homebrewRunning; status = "\(homebrewTitle) is running"
+                detail = "Finish session stops the homebrew video, audio and services before releasing the held endpoint and verifying cleanup."
+                progress = nil; progressLabel = homebrewMessage
+            case .stopped, .failed:
+                phase = .homebrewStopped; status = postRun.homebrewStage == .failed ? "\(homebrewTitle) needs attention" : "\(homebrewTitle) stopped"
+                detail = "Keep the logs, finish this session, then restart the console before another attempt. The homebrew app cannot be retried in this session."
+                progress = nil; progressLabel = homebrewMessage
+            }
+        case .dumping:
+            phase = .dumpingFirmware; status = "Dumping system code"
+            detail = "Keep SmileBASIC open. The live session is reading installed system code; stopping may leave a partial dump."
+            progress = nil; progressLabel = "System-code dump in progress"
+        case .finishing:
+            phase = .rpcFinishing; status = "Finishing the session"
+            detail = "Wait while the host releases the endpoint and verifies final cleanup. Keep SmileBASIC open."
+            progress = nil; progressLabel = "Waiting for final cleanup verification"
+        default: break
+        }
+    }
+
+    private func sessionURL(_ path: String?) -> URL? {
+        guard let path, let runtime else { return nil }
+        let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        guard url.path.hasPrefix(runtime.root.resolvingSymlinksInPath().path + "/") else { return nil }
+        return url
+    }
+
     func clearLog() { log = "" }
 
     func recordDiagnostic(_ message: String) { append(message) }
 
     private func startHost(root: URL) {
+        guard let arguments = activeRunMode.hostArguments(address: selectedAddress) else {
+            fail("Choose an exploit mode to start a host session.")
+            return
+        }
         phase = .hostStarting; status = "Starting a fresh ns2jb host"
         detail = "The Mac and Switch must be on the same local network. Allow incoming connections if macOS asks."
         progress = nil
         progressLabel = "Starting the host on \(selectedAddress)"; isEnumerating = false
-        launch(arguments: ["host", selectedAddress], role: "host", root: root)
+        launch(arguments: arguments, role: "host", root: root)
     }
 
     private func startHID(_ kind: String, root: URL) {
@@ -230,14 +388,18 @@ private struct GUIEvent: Decodable {
         process.executableURL = root.appendingPathComponent("node")
         process.arguments = [root.appendingPathComponent("scripts/gui-host.cjs").path] + arguments
         process.currentDirectoryURL = root
-        process.standardInput = FileHandle.nullDevice
+        if role == "host" {
+            let input = Pipe()
+            _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+            hostInput = input; process.standardInput = input
+        } else { process.standardInput = FileHandle.nullDevice }
         let output = Pipe(); let stderr = Pipe()
         process.standardOutput = output; process.standardError = stderr
         let currentGeneration = generation
         if role == "host" { hostProcess = process } else { hidProcess = process }
         do { try process.run() }
         catch {
-            if role == "host" { hostProcess = nil } else { hidProcess = nil }
+            if role == "host" { hostProcess = nil; hostInput = nil } else { hidProcess = nil }
             fail("Could not launch the bundled tool: \(error.localizedDescription)")
             return
         }
@@ -270,6 +432,12 @@ private struct GUIEvent: Decodable {
 
     private func receive(_ event: GUIEvent, role: String, generation expected: UUID) {
         guard expected == generation else { return }
+        if event.type == "account-progress" {
+            guard role == "host", postRun.homebrewAttempted, homebrewTitle.contains("Stremio"),
+                  let update = event.watchProgress else { return }
+            accountProgressHandler?(update)
+            return
+        }
         if event.type != "host-stage", let message = event.message { append(message, channel: role == "host" ? .host : .usb) }
         if phase == .cancelled || phase == .failed || phase == .verified { return }
         switch event.type {
@@ -278,6 +446,53 @@ private struct GUIEvent: Decodable {
             startHID("commands", root: runtime.root)
         case "run-folder":
             if let path = event.path { runFolder = URL(fileURLWithPath: path) }
+        case "post-run-ready":
+            guard role == "host" else { return }
+            guard let action = activeRunMode.postRunAction,
+                  let command = event.rpcCommand, !command.isEmpty else {
+                fail("The host offered a live endpoint that does not match the selected run mode.")
+                return
+            }
+            guard postRun.ready() else { return }
+            if let folder = sessionURL(event.path) { runFolder = folder }
+            rpcCommand = command
+            guard sendHostControl(action.control) else { return }
+            postRun.choose(keepRPC: action.keepRPC, dumpFirmware: action.dumpFirmware)
+            presentPostRunState()
+        case "rpc-held":
+            guard role == "host", let folder = sessionURL(event.path), postRun.receive(event.type) else { return }
+            if let command = event.rpcCommand { rpcCommand = command }
+            runFolder = folder
+            presentPostRunState()
+        case "homebrew-started", "homebrew-running", "homebrew-stopped", "homebrew-failed":
+            let preserveFailure = postRun.homebrewStage == .failed && event.type == "homebrew-stopped"
+            guard role == "host", postRun.receive(event.type) else { return }
+            if let folder = sessionURL(event.path) { homebrewFolder = folder }
+            if !preserveFailure { homebrewMessage = event.message ?? "\(homebrewTitle) session changed." }
+            presentPostRunState()
+        case "homebrew-progress":
+            guard role == "host", phase == .launchingHomebrew || phase == .homebrewRunning else { return }
+            homebrewMessage = event.message ?? "\(homebrewTitle) is working…"
+            progressLabel = homebrewMessage
+        case "action-rejected":
+            if role == "host", postRun.homebrewStage == .launching {
+                postRun.receive("homebrew-failed")
+                homebrewMessage = event.message ?? "The host could not start \(homebrewTitle) in this session."
+                presentPostRunState()
+            }
+        case "dump-started", "dump-complete":
+            guard role == "host", postRun.receive(event.type) else { return }
+            if let folder = sessionURL(event.path) { dumpFolder = folder }
+            presentPostRunState()
+        case "dump-progress":
+            guard role == "host", phase == .dumpingFirmware else { return }
+            progressLabel = event.message ?? "Reading system code…"
+        case "rpc-finishing":
+            guard role == "host", postRun.receive(event.type) else { return }
+            presentPostRunState()
+        case "rpc-status-started", "rpc-status":
+            guard role == "host", postRun.receive(event.type) else { return }
+            rpcStatus = event.message ?? (event.type == "rpc-status-started" ? "Checking RPC…" : "RPC check finished.")
         case "controller":
             if role == "hid" {
                 status = event.message ?? "Connecting the USB keyboard"
@@ -300,11 +515,20 @@ private struct GUIEvent: Decodable {
             if phase == .bootstrap { status = "Typing the SmileBASIC bootstrap"; progressLabel = "Typing bootstrap lines" }
             else if phase == .commands { status = "Sending the post-bootstrap commands"; progressLabel = "0 of 4 commands sent" }
         case "progress":
-            if let done = event.completed, let total = event.total, total > 0 { progress = min(1, max(0, done / total)) }
-            if let done = event.completed, let total = event.total {
-                progressLabel = "Line \(Int(done)) of \(Int(total))"
-                if phase == .bootstrap { updateBootstrapEstimate(completed: done, total: total) }
-            }
+            guard role == "hid", phase == .bootstrap,
+                  let lineProgress = BootstrapLineProgress(type: event.type, line: event.line,
+                    completed: event.completed, total: event.total) else { return }
+            progress = lineProgress.fraction
+            progressLabel = lineProgress.label
+            updateBootstrapEstimate(completed: Double(lineProgress.completed), total: Double(lineProgress.total))
+        case "line-start", "line-complete":
+            guard role == "hid", phase == .bootstrap,
+                  let lineProgress = BootstrapLineProgress(type: event.type, line: event.line,
+                    completed: event.completed, total: event.total) else { return }
+            isEnumerating = false
+            progress = lineProgress.fraction
+            progressLabel = lineProgress.label
+            updateBootstrapEstimate(completed: Double(lineProgress.completed), total: Double(lineProgress.total))
         case "command-start":
             isEnumerating = false
             if let done = event.completed { progress = min(1, max(0, done / 4)) }
@@ -339,16 +563,17 @@ private struct GUIEvent: Decodable {
             if event.kind == "bootstrap" {
                 appendBootstrapDuration(outcome: "completed")
                 workflowProgress.bootstrapTransferred()
-                phase = .awaitingSave; status = "Save NS2, then enter Direct mode"
-                detail = "The bootstrap has finished typing. Enter Direct mode, type SAVE \"NS2\", and save it in slot 0 before continuing to host & commands."
+                phase = .awaitingSave; status = "Save NS2 in slot 0"
+                detail = "The bootstrap has finished typing. Enter Direct mode, type SAVE \"NS2\", and save it in slot 0. Then return to the start screen."
                 progress = 1; progressLabel = "Bootstrap transfer complete"
-            } else if !hostCompleted {
+            } else if !hostCompleted && !postRun.isActive {
                 phase = .waitingForConsole; status = hostStageLabel
                 detail = "Keyboard delivery is complete. The host must independently verify FS execution and cleanup."
                 progress = hostStageProgress; progressLabel = hostStageLabel
             }
         case "verified":
             guard role == "host" else { return }
+            postRun.receive(event.type)
             endSessionActivity()
             workflowProgress.complete()
             hostCompleted = true
@@ -358,8 +583,9 @@ private struct GUIEvent: Decodable {
         case "failed":
             fail(event.message ?? "The session did not finish. Inspect the Switch before retrying.")
         case "cancelled":
-            endSessionActivity()
+            if hostProcess == nil { endSessionActivity() }
             detail = SessionRecovery.message(event.message ?? "Session stopped.", interruptedPhase: phase)
+            postRun.stop()
             workflowProgress.cancel()
             phase = .cancelled; status = "Session stopped"; progress = nil; progressLabel = ""; isEnumerating = false
         default: break
@@ -368,14 +594,18 @@ private struct GUIEvent: Decodable {
 
     private func workerExited(role: String, process: Process, diagnostic: Data, generation expected: UUID) {
         guard expected == generation else { return }
-        if role == "host", hostProcess === process { hostProcess = nil }
+        if role == "host", hostProcess === process {
+            try? hostInput?.fileHandleForWriting.close()
+            hostInput = nil; hostProcess = nil
+            if phase == .cancelled || phase == .failed { endSessionActivity() }
+        }
         if role == "hid", hidProcess === process { hidProcess = nil }
         if !diagnostic.isEmpty, let text = String(data: diagnostic, encoding: .utf8) { append(text, channel: role == "host" ? .host : .usb) }
         guard phase != .cancelled, phase != .failed, phase != .verified else { return }
         if process.terminationStatus != 0 {
             fail("The \(role == "host" ? "host" : "USB transfer") stopped unexpectedly. Inspect the Switch before retrying.")
         } else if role == "host" && !hostCompleted {
-            fail("The host ended without independently verified FS execution.")
+            fail("The host ended without final cleanup verification. Keep the logs and restart the console before another attempt.")
         }
     }
 
@@ -388,12 +618,13 @@ private struct GUIEvent: Decodable {
         // later cancellation/exit callback must not infer it from .failed.
         let recovery = SessionRecovery.message(message, interruptedPhase: phase)
         workflowProgress.fail()
-        endSessionActivity()
+        if hostProcess == nil { endSessionActivity() }
         ensureFallbackLog()
+        postRun.stop()
         error = recovery; detail = recovery
         phase = .failed; status = "The session needs attention"
         progress = nil; progressLabel = ""; isEnumerating = false
-        append(message)
+        append(recovery)
         appendBootstrapDuration(outcome: "failed")
         stopWorkers()
     }
@@ -485,7 +716,7 @@ private struct GUIEvent: Decodable {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false,
                                                     attributes: [.posixPermissions: 0o700])
             openSessionLog(in: folder)
-            append("mac2jb 0.3.2: runtime preparation diagnostic log.")
+            append("\(AppBuildIdentity.diagnosticLabel): runtime preparation diagnostic log.")
         } catch { diagnosticLogURL = nil }
     }
 

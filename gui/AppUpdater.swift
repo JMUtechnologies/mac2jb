@@ -32,7 +32,8 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
     @Published private(set) var progress: Double = 0
     @Published private(set) var candidate: UpdateCandidate?
     @Published private(set) var diagnosticURL: URL?
-    @Published var checksAutomatically: Bool = UserDefaults.standard.object(forKey: "checkUpdatesAutomatically") as? Bool ?? true {
+    @Published var checksAutomatically: Bool = !AppBuildIdentity.isTestBuild &&
+        (UserDefaults.standard.object(forKey: "checkUpdatesAutomatically") as? Bool ?? true) {
         didSet { UserDefaults.standard.set(checksAutomatically, forKey: "checkUpdatesAutomatically") }
     }
     private var plan: UpdateInstallPlan?
@@ -46,6 +47,7 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
 
     func start() {
         guard !started else { return }; started = true
+        guard !AppBuildIdentity.isTestBuild else { return }
         if checksAutomatically { check(manual: false) }
         periodicCheck = Task { [weak self] in
             while !Task.isCancelled {
@@ -57,6 +59,7 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
     }
 
     func check(manual: Bool = true) {
+        guard updatesAllowed(manual: manual) else { return }
         guard !isWorking, state != .ready else { return }
         if !manual, let last = UserDefaults.standard.object(forKey: "lastUpdateCheck") as? Date,
            Date().timeIntervalSince(last) < 6 * 60 * 60 { return }
@@ -90,6 +93,7 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
     }
 
     func download() {
+        guard updatesAllowed(manual: true) else { return }
         guard state == .available, let candidate else { return }
         plan = nil; diagnosticURL = nil
         state = .downloading; progress = 0; message = "Downloading mac2jb \(candidate.version.text)…"
@@ -144,6 +148,7 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
     }
 
     func install(canRestart: Bool, willInstall: () -> Void) {
+        guard updatesAllowed(manual: true) else { return }
         guard state == .ready, let plan else { return }
         guard canRestart else { message = "Finish or stop the current session and wait for its workers before updating."; return }
         do {
@@ -176,6 +181,15 @@ private final class UpdateDownloadGuard: NSObject, URLSessionDownloadDelegate {
     func dismiss() {
         guard !isWorking else { return }
         if state == .failed || state == .current { state = .idle; message = "" }
+    }
+
+    private func updatesAllowed(manual: Bool) -> Bool {
+        guard AppBuildIdentity.isTestBuild else { return true }
+        if manual {
+            candidate = nil; state = .current
+            message = AppBuildIdentity.updatesDisabledMessage
+        }
+        return false
     }
 
     func revealLog() { if let diagnosticURL { NSWorkspace.shared.activateFileViewerSelecting([diagnosticURL]) } }

@@ -1,10 +1,19 @@
-# mac2jb 0.3.2 GUI
+# mac2jb GUI
 
-v0.3.2 is the active release. A completed Mac-side transfer does not prove that the console accepted the input or that ns2jb succeeded; the host independently verifies execution, restoration, and cleanup.
+mac2jb v0.4.0 provides the ns2jb workflow, HBLauncher and an experimental
+Stremio-compatible player. A completed Mac-side transfer does not prove that
+the console accepted the input or that ns2jb succeeded; the host independently
+verifies execution, restoration and cleanup.
+
+This release includes the fork's exact five-argument bootstrap and matching
+START command. **Replace an older saved nine-argument NS2 before using it.**
+See the [mandatory migration instructions](../README.md#required-replace-the-old-bootstrap).
+Bootstrap progress shows each line as it starts typing and advances the
+completed count after that line finishes.
 
 ## Run the app
 
-On an **Apple Silicon Mac running macOS 14 or newer**, extract the app ZIP and open **mac2jb.app**. Its executable bundles the sender tools, Node.js runtime, host source, bootstrap, unsigned USB driver, and notices. You do not need Node.js, Xcode, or command-line tools to run the prepared app. It extracts its embedded payload into a private session folder.
+On an **Apple Silicon Mac running macOS 14 or newer**, download [the v0.4.0 app ZIP](https://github.com/cpypwn/mac2jb/releases/download/v0.4.0/mac2jb-v0.4.0-macos-arm64.zip), extract it and open **mac2jb.app**. Its executable bundles the sender tools, Node.js runtime, host source, bootstrap, unsigned USB driver, and notices. The app also includes HBLauncher v0.2.0, ftpd-sb v0.1.0, and the required companion tools and fonts. You do not need a Pico, a separate Python or Node.js installation, Xcode, or command-line tools to run the prepared app. It extracts its embedded payload into a private session folder.
 
 The app is ad hoc signed, not Developer ID signed or notarized. If a downloaded copy is blocked by Gatekeeper, try opening it, then use **System Settings → Privacy & Security → Open Anyway**, if macOS offers it. See [Apple’s guidance for opening an app from an unidentified developer](https://support.apple.com/en-us/102445). Do not change kernel-security settings to address a Gatekeeper app warning.
 
@@ -17,14 +26,33 @@ open build/mac2jb.app
 
 `make gui` is the optional shortcut for the build. Building requires Apple Silicon, Xcode Command Line Tools, and the official standalone **Node.js v24.22.1** runtime. The build uses `/usr/local/bin/node` by default; set `NODE_BINARY` to another v24.22.1 executable if needed. Running the resulting application does not require these tools. The existing CLI workflow remains `make` followed by `bash mac2jb.command`. The existing CLI remains available alongside the GUI.
 
+The HBLauncher package includes **Python 3.13.17**, **Pillow 13.0.0**,
+**SPIRV-Tools 2026.4**, and **DejaVu Sans 2.37**. See the
+[packaging notices](../packaging/NOTICE.md) for attribution; these dependencies
+are included in the prepared app.
+
 ## What the GUI handles
 
 Select the Mac’s IPv4 address on the same network as the Switch. The GUI keeps the host and its current pairing values together, selects a USB controller automatically, and sends the post-bootstrap commands. **Install & load driver…** installs the bundled unsigned driver through an administrator prompt, preserves an existing driver in a backup, and requests loading. Complete Recovery settings first, then any approval/restart prompts. The extra Enter for SmileBASIC’s `LOAD` confirmation is included. The expected **Out of memory** response after `REMOVE` is part of the upstream procedure.
 
-- **Full setup:** Open **SmileBASIC → Make a Program** with an empty editor before starting the bootstrap transfer. Allow approximately 7–10 minutes at the default typing speed. The GUI shows elapsed time and an estimate while it types, and records the final duration in the private session log. Wait until the entire bootstrap has finished typing; then enter **Direct mode**, type `SAVE "NS2"`, save it in **slot 0**, and continue to host & commands.
-- **Saved bootstrap:** With **NS2 already saved in slot 0**, **restart the console → open SmileBASIC → enter Direct mode**. mac2jb automatically sends `LOAD "TXT:NS2"` first. The GUI skips the long bootstrap transfer, starts a new host session, and sends the post-bootstrap commands using fresh pairing values.
+### Choose a mode before starting
 
-The sidebar tracks the selected flow and current attempt. Once a **Saved bootstrap** run starts, **Type bootstrap** is checked. After a failure or cancellation, **Prepare** becomes active again and the interrupted step shows an **X**. Returning to Prepare does not repeat typing automatically.
+The start screen separates **Type bootstrap only** from the three choices for an `NS2` already saved in slot 0. Those three saved-bootstrap choices appear side by side. **Restart the console before every run**, then prepare SmileBASIC for the selected choice:
+
+| Choice | What happens |
+| --- | --- |
+| **Type bootstrap only** | Types the exact fork bootstrap into an empty SmileBASIC program editor. When typing finishes, save it as `NS2` in slot 0 and return to the start screen. It does not start a host or run the exploit. |
+| **NS2JB exploit only** | Loads the saved new `NS2`, sends RUN, REMOVE, and this host's START command, verifies execution and restoration, then releases resources and finishes. It does not hold RPC open. |
+| **Held RPC** | Runs the same saved-bootstrap exploit sequence, then keeps the verified RPC and FS endpoint available. Keep mac2jb and SmileBASIC open. Use **Check RPC** or copy the status command as needed, then choose **Finish session** to release resources and verify cleanup. |
+| **System-code dump** | Runs the same saved-bootstrap exploit sequence, captures accessible installed system-program `main` and `main.npdm` files with an inventory and hashes, then releases resources and finishes automatically. Choose **Open dump folder** after completion. |
+
+For **Type bootstrap only**, open **SmileBASIC → Make a Program** with an empty editor before starting. Allow approximately 7–10 minutes at the default typing speed. Wait until typing finishes; then enter **Direct mode**, type `SAVE "NS2"`, save it in **slot 0**, and return to the start screen. Restart the console before starting another choice.
+
+For the other three choices, first save the fork's new five-argument bootstrap as `NS2` in slot 0. **Restart the console → open SmileBASIC → enter Direct mode**, use Ethernet for the Switch 2 until Wi-Fi support is confirmed, select the Mac's IPv4 address on that network, then start. These choices use the saved program and do not type the bootstrap again.
+
+The selected operation proceeds automatically after 4/4 verification; there is no later options prompt. A dump uses a new private folder and requires at least **512 MiB free** on the Mac. Captures cover accessible system-program code, not a full NAND image. Keep SmileBASIC and mac2jb open until the selected operation and final cleanup finish. A failed capture retains partial files and is not automatically retried; keep the output and logs, then restart the console before another attempt.
+
+The sidebar tracks the selected flow and current attempt. After a failure or cancellation, **Prepare** becomes active again and the interrupted step shows an **X**. Returning to Prepare does not repeat typing automatically.
 
 Automatic USB selection tries the tested controllers 0, 1, and 3. Choose another controller manually if your Mac uses a different mapping. A retry is allowed only before typing begins. After a partial bootstrap, inspect and clear the editor before trying again. If post-bootstrap commands have started, or an exploit attempt fails or is cancelled, **restart the console before another attempt**. Do not send `REMOVE` twice in the same application process.
 
@@ -32,13 +60,39 @@ The timing controls let you tune key pacing, each controller’s enumeration tim
 
 The GUI cannot inspect the Switch screen, verify a saved program, operate macOS Recovery, grant kernel-extension approval, or guarantee exploit success. Keep the console focused and the USB cable connected. Only the host’s verified result establishes **FS execution verified**, including restoration and cleanup; **keyboard transfer completed** means only that the HID sender finished.
 
+## Homebrew
+
+Start a fresh **Held RPC** session using the new saved `NS2`. Once 4/4 succeeds,
+choose **Launch HBLauncher** under **Already got the ns2jb exploit running?**
+to start the bundled **HBLauncher v0.2.0** through that same live connection. Keep mac2jb and SmileBASIC open. The app supplies the launcher,
+apps, runtime, and companion tools; no Pico or second bootstrap is needed.
+HBLauncher can be launched only once in each held session.
+
+HBLauncher runs GPU apps through SmileBASIC. When done, finish the session and
+restart the console before another run. Stopping the launcher does not establish
+that every retained GPU allocation was released. After a failed or interrupted
+launch, keep the logs and restart before trying again. See
+[the Homebrew guide](HOMEBREW.md).
+
+The bundle also includes **ftpd-sb v0.1.0**. In HBLauncher, select **Refresh**, open **ftpd-sb**, and press **A** to start. See [the FileZilla connection guide](FTPD-SB.md) for the console IP, passive anonymous FTP, and storage scope.
+
+To add apps, use **Open session logs**, then open **vendor → HBLauncher → apps**
+and copy in each complete prebuilt app folder. Return to the launcher menu and
+select **Refresh**. See [app installation and persistence](HOMEBREW.md#adding-hblauncher-apps).
+
+Alternatively, choose **Launch Stremio** directly from a fresh Held RPC session.
+Only one homebrew application can be launched per session. Stremio must be
+installed on the Mac; see the [player guide](STREMIO-EXPERIMENTAL.md) for supported
+media, account features and controls.
+
+
 ## Before a first run
 
 1. Have an Apple Silicon Mac, a data-capable USB-C cable, and the compatible console software. The project’s tested combination is **Switch 2 system software 23.0.1 and SmileBASIC 4.4.9**, with more than **20 MiB free** in the SmileBASIC save.
 2. **SIP must be disabled for the bundled unsigned driver.** In macOS Recovery, enable third-party kernel extensions and run `csrutil disable` in Terminal. Restart into macOS. You do not need to compile or sign the bundled driver. The GUI never changes Recovery settings.
 3. Click **Install & load driver…**, approve the administrator prompt, complete macOS approval if requested, and restart. The tested unsigned driver is bundled; Xcode is not required. The previous CLI also supports `bash mac2jb.command --install-driver`. See [driver setup and source-build fallback](../README.md#install-the-bundled-usb-driver-recommended).
-4. Put the Mac and Switch on the same reachable local network, select that network’s Mac IPv4 address, and allow the host through macOS networking/firewall prompts if requested. The host uses TCP port **39380**. Use a data-capable cable and check the USB power direction: on the tested hardware, enumeration failed when the Mac was charging the Switch. If the Switch shows that it is charging from the Mac, disconnect and reconnect the cable before retrying. A charging indicator does not prove that the keyboard data connection is working.
-5. Preserve compatible console software before testing. Follow the [README’s 90DNS guidance](../README.md#highly-recommended-protect-the-required-software-versions), including its regional IPv4 addresses. Its Step 3 wording remains: “Set both primary and secondary IPv6 DNS to `::`, as described in the linked guide. Save the settings and reconnect to the Wi-Fi network.”
+4. Put the Mac and Switch on the same reachable local network. **Ethernet is likely required for the Switch 2; Wi-Fi has not yet been verified with this setup.** Select that network’s Mac IPv4 address, and allow the host through macOS networking/firewall prompts if requested. The host uses TCP port **39380**. Use a data-capable cable and check the USB power direction: on the tested hardware, enumeration failed when the Mac was charging the Switch. If the Switch shows that it is charging from the Mac, disconnect and reconnect the cable before retrying. A charging indicator does not prove that the keyboard data connection is working.
+5. Preserve compatible console software before testing. Follow the [README’s 90DNS guidance](../README.md#highly-recommended-protect-the-required-software-versions), including its regional IPv4 addresses and IPv6 instructions, on the network connection used for testing.
 6. On the **Switch 2**, set **System Settings → Controllers & Accessories → USB Keyboard → US English**. This is required for bootstrap typing and post-bootstrap commands. The Mac's physical keyboard/input layout does not affect mac2jb's US-layout USB keycodes. If `#` appeared as `£` or letters were substituted, correct the console setting, clear the corrupted bootstrap, and resend it; you do not need to edit `sender.c`.
 
 Once a compatible driver is installed, approved, and loaded, the prepared application removes the need to build senders, install Node.js, open Terminal windows, copy pairing commands, or choose a controller by trial and error at the command line. The console-side preparation and verification checkpoints remain necessary.
@@ -47,7 +101,7 @@ Once a compatible driver is installed, approved, and loaded, the prepared applic
 
 Use **mac2jb → Check for Updates…**, or leave **Check for Updates Automatically** enabled. Automatic checks run at launch if at least six hours have passed since the last successful check, then daily while the app stays open. Choose **Download update** and, after the current session/driver work finishes, **Restart & update**. The app verifies the download and app bundle, keeps a backup of the old app, and reopens the new version. A failed replacement restores the old app; errors show the private updater log path.
 
-Updating affects the app only. Drivers, Recovery settings, and existing session logs are left in place. Your app folder must be writable; macOS security checks remain in effect. The updater trusts the public mac2jb GitHub repository over HTTPS and validates GitHub digests and the release checksum file; the app remains ad-hoc signed. Users on v0.3.1 or earlier must download v0.3.2 manually once. The CLI is updated separately.
+Updating affects the app only. Drivers, Recovery settings, and existing session logs are left in place. Your app folder must be writable; macOS security checks remain in effect. The updater trusts the public mac2jb GitHub repository over HTTPS and validates GitHub digests and the release checksum file; the app remains ad-hoc signed. If your older app has no updater, download v0.4.0 manually. The CLI is updated separately.
 
 ## Session data and distribution
 

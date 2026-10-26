@@ -2,7 +2,9 @@ import Foundation
 
 enum SessionPhase: String {
     case preparing, ready, bootstrap, awaitingSave, hostStarting, commands
-    case waitingForConsole, verified, failed, cancelled
+    case waitingForConsole, rpcHeld, dumpingFirmware, rpcFinishing
+    case launchingHomebrew, homebrewRunning, homebrewStopped
+    case verified, failed, cancelled
 }
 
 enum SessionRecovery {
@@ -15,12 +17,31 @@ enum SessionRecovery {
             guard message.range(of: "partial bootstrap", options: .caseInsensitive) == nil else { return message }
             return append("Clear any partial bootstrap before typing again.", to: message)
         case .hostStarting, .commands, .waitingForConsole:
-            let restart = #"(?i)\b(?:restart|reboot)\s+(?:(?:the|your)\s+)?(?:console|switch(?:\s+2)?)\b"#
-            guard message.range(of: restart, options: .regularExpression) == nil else { return message }
-            return append("Restart the console before another post-bootstrap attempt.", to: message)
+            return addingRestart(to: message, liveSession: false)
+        case .dumpingFirmware:
+            let partialDump = #"(?i)\bpartial(?:\s+(?:system[- ]code|firmware))?\s+dump\b"#
+            let recovery = message.range(of: partialDump, options: .regularExpression) == nil
+                ? append("A partial system-code dump may remain; keep the logs and dump folder.", to: message)
+                : message
+            return addingRestart(to: recovery, liveSession: true)
+        case .launchingHomebrew, .homebrewRunning:
+            let recovery = message.range(of: "homebrew logs", options: .caseInsensitive) == nil
+                ? append("Keep the homebrew logs; the app may have been interrupted.", to: message)
+                : message
+            return addingRestart(to: recovery, liveSession: true)
+        case .rpcHeld, .rpcFinishing, .homebrewStopped:
+            return addingRestart(to: message, liveSession: true)
         default:
             return message
         }
+    }
+
+    private static func addingRestart(to message: String, liveSession: Bool) -> String {
+        let restart = #"(?i)\b(?:restart|reboot)\s+(?:(?:the|your)\s+)?(?:console|switch(?:\s+2)?)\b"#
+        guard message.range(of: restart, options: .regularExpression) == nil else { return message }
+        return append(liveSession
+                      ? "Restart the console after the host has stopped, before another attempt."
+                      : "Restart the console before another post-bootstrap attempt.", to: message)
     }
 
     private static func append(_ instruction: String, to message: String) -> String {

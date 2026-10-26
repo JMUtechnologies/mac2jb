@@ -14,7 +14,7 @@ static const char *steps[] = {
 
 
 // The host wrapper publishes only the currently active session's START line.
-// Never fall back to a previous or hardcoded pairing token.
+// Never fall back to a previous or hardcoded START command.
 static int load_active_start(char *destination, size_t capacity) {
     const char *file = "vendor/ns2jb/runs/mac2jb-active-connect.txt";
     FILE *stream = fopen(file, "r");
@@ -47,9 +47,9 @@ static int load_active_start(char *destination, size_t capacity) {
         fprintf(stderr, "Invalid V=START command supplied by host.\n");
         return -1;
     }
-    // Exactly nine unsigned decimal values: port, four address octets, four session tokens.
+    // The fork's bootstrap takes exactly five values: port and four IP octets.
     const char *p = destination + 8;
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 5; i++) {
         if (*p < '0' || *p > '9') return -1;
         errno = 0;
         char *next;
@@ -57,8 +57,8 @@ static int load_active_start(char *destination, size_t capacity) {
         if (errno == ERANGE || next == p ||
             (i == 0 && value != 39380) ||
             (i >= 1 && i <= 4 && value > 255) ||
-            (i < 8 && *next != ',') ||
-            (i == 8 && *next != ')')) {
+            (i < 4 && *next != ',') ||
+            (i == 4 && *next != ')')) {
             fprintf(stderr, "Invalid V=START parameter %d.\n", i+1);
             return -1;
         }

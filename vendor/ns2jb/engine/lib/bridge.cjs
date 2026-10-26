@@ -1,10 +1,8 @@
 const http = require('node:http');
-const crypto = require('node:crypto');
 
 // Stage programs share one native connection through this local, serialized
-// bridge. Its address and token exist only in the current launch directory.
+// bridge. Its address exists only in the current launch directory.
 async function serve(native) {
-  const token = crypto.randomBytes(32).toString('hex');
   let queue = Promise.resolve();
   const enqueue = task => {
     const result = queue.then(task);
@@ -41,7 +39,7 @@ async function serve(native) {
     throw Error('Unknown bridge command');
   }
   const server = http.createServer(async (req, res) => {
-    if (req.method !== 'POST' || req.url !== '/' || req.headers.authorization !== 'Bearer ' + token) {
+    if (req.method !== 'POST' || req.url !== '/') {
       res.writeHead(403).end(); return;
     }
     try {
@@ -78,7 +76,7 @@ async function serve(native) {
   }, 5000);
   heartbeat.unref();
   return {
-    port: server.address().port, token,
+    port: server.address().port,
     keepAwake(value) {activity = value;},
     async close() {
       clearInterval(heartbeat);

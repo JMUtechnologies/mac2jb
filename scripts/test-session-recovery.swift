@@ -26,7 +26,7 @@ import Foundation
             check(SessionRecovery.message(recovery, interruptedPhase: .bootstrap) == recovery,
                   "bootstrap guidance is not repeated")
         }
-        for phase in [SessionPhase.preparing, .ready, .awaitingSave] {
+        for phase in [SessionPhase.preparing, .ready, .awaitingSave, .verified, .failed, .cancelled] {
             check(SessionRecovery.message("Session stopped.", interruptedPhase: phase) == "Session stopped.",
                   "\(phase): no partial-bootstrap or post-bootstrap instruction")
         }
@@ -34,6 +34,26 @@ import Foundation
               "Reboot your Switch 2 before retrying.", "alternate console-restart wording is preserved")
         check(SessionRecovery.message("restart the console before retrying.", interruptedPhase: .waitingForConsole) ==
               "restart the console before retrying.", "restart detection ignores capitalization")
+        for phase in [SessionPhase.rpcHeld, .rpcFinishing, .dumpingFirmware,
+                      .launchingHomebrew, .homebrewRunning, .homebrewStopped] {
+            let stopped = SessionRecovery.message("Session stopped.", interruptedPhase: phase)
+            check(stopped.components(separatedBy: "Restart the console").count == 2 &&
+                  stopped.contains("after the host has stopped") && !stopped.contains("partial bootstrap"),
+                  "\(phase): live-session recovery waits for the host and has one restart")
+            check(SessionRecovery.message(stopped, interruptedPhase: phase) == stopped,
+                  "\(phase): repeated recovery does not duplicate instructions")
+            let provided = SessionRecovery.message(upstream, interruptedPhase: phase)
+            check(provided.lowercased().components(separatedBy: "restart the console").count == 2,
+                  "\(phase): existing restart guidance is retained once")
+        }
+        let dump = SessionRecovery.message("The dump stopped.", interruptedPhase: .dumpingFirmware)
+        check(dump.contains("partial system-code dump") && dump.contains("logs and dump folder"),
+              "interrupted dump retains partial acquisition and logs")
+        for phase in [SessionPhase.launchingHomebrew, .homebrewRunning] {
+            let homebrew = SessionRecovery.message("Stremio stopped.", interruptedPhase: phase)
+            check(homebrew.contains("homebrew logs") && !homebrew.contains("HBLauncher"),
+                  "\(phase): homebrew recovery applies to the current app")
+        }
         print("\(passed) session recovery checks passed; no hardware used.")
     }
 }

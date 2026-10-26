@@ -1,5 +1,4 @@
 const net = require('node:net');
-const crypto = require('node:crypto');
 
 const HELLO_BYTES = 128;
 const MAGIC = 0x31545344;
@@ -7,7 +6,7 @@ const MAGIC = 0x31545344;
 // TCP may split a record anywhere. A timeout ends the connection; requests
 // cannot be replayed because a native operation might already have completed.
 class Connection {
-  constructor(socket, timeout = 30000) {
+  constructor(socket, timeout = 120000) {
     this.socket = socket;
     this.timeout = timeout;
     this.buffer = Buffer.alloc(0);
@@ -67,11 +66,7 @@ class Connection {
   close() { this.fail(Error('Connection closed')); }
 }
 
-function pairingCode() {
-  return Array.from({length: 4}, () => crypto.randomBytes(6).readUIntLE(0, 6));
-}
-
-function parseHello(bytes, token) {
+function parseHello(bytes) {
   if (bytes.length !== HELLO_BYTES) throw Error('Incomplete console greeting');
   const words = Array.from({length: 16}, (_, index) => bytes.readBigUInt64LE(index * 8));
   if (words.some(value => value > BigInt(Number.MAX_SAFE_INTEGER)))
@@ -79,10 +74,6 @@ function parseHello(bytes, token) {
   const values = words.map(Number);
   if (values[0] !== MAGIC || values[1] !== 1 || values[2] !== 2)
     throw Error('Wrong launcher protocol or console type');
-  const expected = Buffer.alloc(32);
-  token.forEach((value, index) => expected.writeBigUInt64LE(BigInt(value), index * 8));
-  if (!crypto.timingSafeEqual(bytes.subarray(88, 120), expected))
-    throw Error('Pairing code does not match this launch');
   const names = ['scratch', 'scratchBytes', 'main', 'sdk', 'got', 'memmove', 'backing', 'controller'];
   const addresses = Object.fromEntries(names.map((name, index) => [name, values[index + 3]]));
   const {scratch, scratchBytes, main, sdk, got, memmove, backing, controller} = addresses;
@@ -98,7 +89,7 @@ function parseHello(bytes, token) {
   return {...addresses, platform: 2, sdkCrc32: values[15]};
 }
 
-async function listen({host, port, token, onWaiting, timeout = 10 * 60 * 1000}) {
+async function listen({host, port, onWaiting, timeout = 10 * 60 * 1000}) {
   if (!net.isIPv4(host)) throw Error('Use the computer\'s LAN IPv4 address');
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Error('Port must be 1024..65535');
   const pending = new Set();
@@ -119,11 +110,11 @@ async function listen({host, port, token, onWaiting, timeout = 10 * 60 * 1000}) 
       pending.add(connection);
       connection.read(HELLO_BYTES).then(bytes => {
         if (finished) throw Error('Pairing has ended');
-        const addresses = parseHello(bytes, token);
+        const addresses = parseHello(bytes);
         pending.delete(connection);
         stop();
         for (const other of pending) other.close();
-        connection.timeout = 30000;
+        connection.timeout = 120000;
         resolve({connection, addresses});
       }).catch(() => {pending.delete(connection); connection.close();});
     });
@@ -135,4 +126,4 @@ async function listen({host, port, token, onWaiting, timeout = 10 * 60 * 1000}) 
   });
 }
 
-module.exports = {Connection, HELLO_BYTES, MAGIC, pairingCode, parseHello, listen};
+module.exports = {Connection, HELLO_BYTES, MAGIC, parseHello, listen};

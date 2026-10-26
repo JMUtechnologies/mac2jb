@@ -46,7 +46,13 @@ jobs:
       - name: Verify ns2jb snapshot and tests
         run: |
           (cd vendor/ns2jb && shasum -a 256 -c SHA256SUMS)
-          node --test vendor/ns2jb/test.cjs scripts/test-gui-host.cjs scripts/test-driver-package.cjs
+          (cd vendor/HBLauncher && shasum -a 256 -c ../../packaging/HBLauncher-v0.2.0-SHA256SUMS)
+          node scripts/prepare-bootstrap.cjs --check
+          node scripts/prepare-homebrew-apps.cjs --check
+          node --test vendor/ns2jb/test.cjs vendor/ns2jb/engine/switch2/retained/*.test.cjs vendor/ns2jb/engine/switch2/ro/layout.test.cjs scripts/test-gui-host.cjs scripts/test-gui-session.cjs scripts/test-gui-homebrew.cjs scripts/test-gui-stremio.cjs scripts/test-gui-dump.cjs scripts/test-fork-integration.cjs scripts/test-start-command.cjs scripts/test-bootstrap-progress.cjs scripts/test-driver-package.cjs scripts/test-homebrew-apps.cjs
+
+      - name: Verify experimental media protocol and Stremio addon client
+        run: node --test stremio/*.test.cjs stremio/test-*.cjs
 
       - name: Check shell script syntax
         run: |
@@ -61,6 +67,21 @@ jobs:
 
       - name: Verify stage-specific failure and cancellation guidance
         run: bash scripts/test-session-recovery.sh
+
+      - name: Verify current bootstrap line progress
+        run: bash scripts/test-bootstrap-progress.sh
+
+      - name: Verify post-run RPC and dump choices
+        run: bash scripts/test-post-run-state.sh
+
+      - name: Verify Homebrew ownership and state transitions
+        run: bash scripts/test-homebrew-state.sh
+
+      - name: Verify start-screen session modes
+        run: bash scripts/test-session-run-mode.sh
+
+      - name: Verify Stremio account and Library fixtures without a real account
+        run: bash scripts/test-stremio-account.sh
 
       - name: Verify updater validation and rollback without hardware
         run: bash scripts/test-updater.sh
@@ -80,4 +101,5 @@ jobs:
         run: |
           NODE_BINARY="$(command -v node)" bash scripts/build-gui.sh
           "build/mac2jb.app/Contents/MacOS/mac2jb" --self-test
-          python3 scripts/audit-release.py .build-gui/mac2jb-0.3.2-source.zip
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' gui/Info.plist)"
+          python3 scripts/audit-release.py ".build-gui/mac2jb-${VERSION}-source.zip"

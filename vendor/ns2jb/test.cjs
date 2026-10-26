@@ -7,11 +7,16 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {once} = require('node:events');
-const {Connection, parseHello, pairingCode, MAGIC} = require('./engine/lib/connection.cjs');
+const {EventEmitter} = require('node:events');
+const {Connection, parseHello, MAGIC} = require('./engine/lib/connection.cjs');
 const {callRecord} = require('./engine/lib/native.cjs');
 const {build} = require('./engine/shared/frames.cjs');
 const {plan} = require('./engine/switch2/memory/signed-cache-plan.cjs');
-const {chooseHost, addresses, connectCommand} = require('./run.cjs');
+const {chooseHost, addresses, connectCommand, prepareDumpDirectory,
+  startEngine, checkEngine, waitForRpcStop} = require('./run.cjs');
+const {waitForRelease} = require('./engine/switch2/hold.cjs');
+const {serve} = require('./engine/lib/bridge.cjs');
+const {request: rpcRequest} = require('./rpc.cjs');
 const {isUtf8} = require('node:buffer');
 
 async function channel(t, timeout = 1000) {
@@ -58,27 +63,76 @@ test('a disconnect cannot turn a partial record into a reply', async t => {
   await assert.rejects(connection.read(8), /disconnected|closed/);
 });
 
-function hello(platform, token) {
+test('held RPC ends on operator signal or console disconnect without leaking listeners', async () => {
+  for (const [event, expected] of [['SIGINT', 'SIGINT'], ['SIGTERM', 'SIGTERM'], ['close', 'disconnected']]) {
+    const signals = new EventEmitter(), socket = new EventEmitter();
+    const waiting = waitForRpcStop({socket}, signals);
+    (event === 'close' ? socket : signals).emit(event);
+    assert.equal(await waiting, expected);
+    assert.equal(signals.listenerCount('SIGINT'), 0);
+    assert.equal(signals.listenerCount('SIGTERM'), 0);
+    assert.equal(socket.listenerCount('close'), 0);
+  }
+});
+
+test('held FS endpoint waits for an explicit release or parent disconnect', async () => {
+  for (const event of ['release', 'disconnect']) {
+    const channel = new EventEmitter();
+    channel.send = () => {};
+    channel.connected = true;
+    const pending = waitForRelease(channel);
+    if (event === 'release') channel.emit('message', {type: 'release'});
+    else channel.emit('disconnect');
+    assert.equal(await pending, event === 'release' ? 'release' : 'parent-disconnected');
+    assert.equal(channel.listenerCount('message'), 0);
+    assert.equal(channel.listenerCount('disconnect'), 0);
+  }
+});
+
+test('held engine remains alive until the runner releases it', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ns2jb-held-engine-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  fs.mkdirSync(path.join(root, 'switch2'));
+  fs.writeFileSync(path.join(root, 'switch2/pipeline.cjs'),
+    "process.on('message', value => {if (value?.type === 'release') process.exit(0)});" +
+    "process.send({type: 'held-ready', session: 'test'});\n");
+  const engine = await startEngine(root, null, true);
+  assert.equal((await engine.ready).session, 'test');
+  assert.equal(engine.child.exitCode, null);
+  checkEngine(await engine.release());
+  assert.equal(engine.child.exitCode, 0);
+  assert.ok(fs.existsSync(path.join(root, 'run.log')));
+});
+
+test('held RPC client reaches the local bridge and reports request errors', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ns2jb-rpc-test-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  const native = {connection: {error: null}, calls: 7};
+  const bridge = await serve(native);
+  t.after(() => bridge.close());
+  const file = path.join(root, 'connection.json');
+  fs.writeFileSync(file, JSON.stringify({port: bridge.port}));
+  assert.deepEqual(await rpcRequest(root, {command: 'status'}), {ready: true, calls: 7});
+  await assert.rejects(rpcRequest(root, {command: 'missing'}), /Unknown bridge command/);
+});
+
+function hello(platform) {
   const sdk = 0x4012300000, main = 0x3012300000;
   const values = [MAGIC, 1, platform, 0x5012340000, 0x80000, main, sdk,
-    main + 0x9c92f0, sdk + 0x5872f0, 0x5010100000, 0x5010100070, ...token, 3925528160];
+    main + 0x9c92f0, sdk + 0x5872f0, 0x5010100000, 0x5010100070,
+    0, 0, 0, 0, 3925528160];
   const bytes = Buffer.alloc(128);
   values.forEach((value, index) => bytes.writeBigUInt64LE(BigInt(value), index * 8));
   return bytes;
 }
 
-test('pairing binds the fresh token, platform and bootstrap layout', () => {
-  const token = pairingCode();
-  assert.equal(token.length, 4);
-  assert.ok(token.every(value => Number.isSafeInteger(value) && value >= 0 && value < 2 ** 48));
+test('console greeting binds the platform and bootstrap layout', () => {
   for (const platform of [2]) {
-    const bytes = hello(platform, token);
-    assert.equal(parseHello(bytes, token).platform, platform);
-    assert.throws(() => parseHello(hello(1, token), token), /console type/);
-    const other = [...token]; other[0] = (other[0] + 1) % 2 ** 48;
-    assert.throws(() => parseHello(bytes, other), /Pairing code/);
+    const bytes = hello(platform);
+    assert.equal(parseHello(bytes).platform, platform);
+    assert.throws(() => parseHello(hello(1)), /console type/);
     bytes.writeBigUInt64LE(0x80001n, 32);
-    assert.throws(() => parseHello(bytes, token), /bootstrap layout/);
+    assert.throws(() => parseHello(bytes), /bootstrap layout/);
   }
 });
 
@@ -141,11 +195,39 @@ test('payloads have their declared hashes and contain NSO images', () => {
   }
 });
 
+test('read-only NCM list request decodes bounded system-program keys', () => {
+  const {listInput, parse} = require('./engine/switch2/ro/ncm.cjs');
+  const input = listInput();
+  assert.equal(input.length, 32);
+  assert.equal(input[0], 1);
+  assert.equal(input[1], 0);
+  assert.equal(input.readBigUInt64LE(24), 0xffffffffffffffffn);
+  const output = Buffer.alloc(1024 * 16), data = Buffer.alloc(8);
+  output.writeBigUInt64LE(0x040000000000000an);
+  output.writeUInt32LE(123, 8);
+  output[12] = 1;
+  output.writeBigUInt64LE(0x0400000000001000n, 16);
+  output.writeUInt32LE(456, 24);
+  output[28] = 1;
+  data.writeInt32LE(2, 0);
+  data.writeInt32LE(2, 4);
+  const result = parse({result: 0, data}, output);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.keys.map(key => key.id),
+    ['0x040000000000000a', '0x0400000000001000']);
+  assert.deepEqual(result.keys.map(key => key.version), [123, 456]);
+  data.writeInt32LE(1025, 4);
+  assert.throws(() => parse({result: 0, data}, output), /count or output buffer/);
+});
+
 
 test('one host address and one BASIC command select the fixed Switch 2 path', async () => {
   assert.equal(await chooseHost(['192.0.2.10']), '192.0.2.10');
-  assert.equal(connectCommand('192.0.2.10', [1, 2, 3, 281474976710655]),
-    'V=START(39380,192,0,2,10,1,2,3,281474976710655)');
+  assert.equal(connectCommand('192.0.2.10'),
+    'V=START(39380,192,0,2,10)');
+  assert.equal(connectCommand('192.0.2.10', 9),
+    'V=START(39380,192,0,2,10,0,0,0,0)');
+  assert.throws(() => connectCommand('192.0.2.10', 8), /NS2_BASIC_ARITY/);
   await assert.rejects(chooseHost(['switch1']), /Usage/);
   await assert.rejects(chooseHost(['192.0.2.10', 'extra']), /Usage/);
   assert.deepEqual(addresses({a: [
@@ -178,8 +260,28 @@ test('a stop prevents the next operation but still permits restoration', async t
   assert.ok(snapshots.some(row => row.mode === 'retiring' && row.checkpoint === 'restore'));
 });
 
+test('firmware dumps use a dedicated directory and clear only marked prior dumps', async t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'ns2jb-dump-test-'));
+  t.after(() => fs.rmSync(base, {recursive: true, force: true}));
+  const root = path.join(base, 'dumps');
+  fs.mkdirSync(root);
+  fs.writeFileSync(path.join(root, 'user-file'), 'keep');
+  await assert.rejects(prepareDumpDirectory(root), /unrecognized nonempty/);
+  assert.equal(fs.readFileSync(path.join(root, 'user-file'), 'utf8'), 'keep');
+  fs.unlinkSync(path.join(root, 'user-file'));
+  assert.deepEqual(await prepareDumpDirectory(root), {root, cleaned: true});
+  fs.writeFileSync(path.join(root, 'old-capture'), 'old');
+  assert.deepEqual(await prepareDumpDirectory(root), {root, cleaned: true});
+  assert.equal(fs.existsSync(path.join(root, 'old-capture')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.ns2jb-firmware-dump.json'))).kind,
+    'ns2jb-system-code-dump');
+  fs.rmSync(root, {recursive: true});
+  fs.symlinkSync(base, root);
+  await assert.rejects(prepareDumpDirectory(root), /symlink/);
+});
+
 test('the engine has only local or Node dependencies, all present in the package', () => {
-  const root = __dirname, files = ['run.cjs'];
+  const root = __dirname, files = ['run.cjs', 'rpc.cjs', 'dump-firmware.cjs'];
   function walk(folder) {
     for (const item of fs.readdirSync(path.join(root, folder), {withFileTypes: true})) {
       const name = folder + '/' + item.name;
@@ -201,4 +303,15 @@ test('the engine has only local or Node dependencies, all present in the package
       }
     }
   }
+});
+
+test('startup gap cleanup matches every root entry beginning NS2_GAP', () => {
+  const {gapScratch, scratchDeleteCommand} = require('./engine/switch2/cleanup-scratch.cjs');
+  assert.equal(gapScratch({name: 'NS2_GAP_1792870235231', type: 0}), true);
+  assert.equal(gapScratch({name: 'NS2_GAP_notes', type: 0}), true);
+  assert.equal(gapScratch({name: 'NS2_GAP_file', type: 1}), true);
+  assert.equal(gapScratch({name: 'other_NS2_GAP', type: 0}), false);
+  assert.equal(scratchDeleteCommand(0), 4);
+  assert.equal(scratchDeleteCommand(1), 1);
+  assert.throws(() => scratchDeleteCommand(2), /unsupported/);
 });

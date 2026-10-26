@@ -1,0 +1,30 @@
+{
+  "project": "ftpd-sb",
+  "version": "0.1.0",
+  "tag": "v0.1.0",
+  "repository": "https://github.com/ravensclawx/ftpd-sb",
+  "commit": "ab2123cfb97d492264bf6609cb410e285d6d9b5f",
+  "releaseUrl": "https://github.com/ravensclawx/ftpd-sb/releases/tag/v0.1.0",
+  "releaseId": 422061148,
+  "asset": {
+    "id": 669686481,
+    "name": "ftpd-sb-v0.1.0.zip",
+    "size": 103460,
+    "digest": "sha256:e3c0e0387d2cdaa6b9345cd8e601cab584f7e46c5f16a285a39c368b5d33140e",
+    "browser_download_url": "https://github.com/ravensclawx/ftpd-sb/releases/download/v0.1.0/ftpd-sb-v0.1.0.zip"
+  },
+  "publishedChecksums": {
+    "id": 669686482,
+    "name": "SHA256SUMS",
+    "size": 85,
+    "digest": "sha256:a162967e19d004564301f0607690ebae1cea7b3acf402345016607e9409b2381",
+    "browser_download_url": "https://github.com/ravensclawx/ftpd-sb/releases/download/v0.1.0/SHA256SUMS"
+  },
+  "integrityManifestSha256": "0f085741f5707a41458be681eb7d2241cbc49f0574f5b0a4b3abba907f20214b",
+  "fileCount": 20,
+  "overlayPath": "assets/homebrew-apps/ftpd-sb",
+  "runtimePath": "vendor/HBLauncher/apps/ftpd-sb",
+  "origin": "Exact ftpd-sb/ contents of the verified published release ZIP; no files modified or omitted.",
+  "licenseNotice": "Upstream README states no blanket license has been assigned; all included source, assets, credits, and third-party notices are retained. mac2jb does not relicense them.",
+  "sourceVerification": "All 20 release files match Git blob IDs from the full tree of commit ab2123cfb97d492264bf6609cb410e285d6d9b5f."
+}

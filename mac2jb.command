@@ -359,7 +359,7 @@ for (( wait_step=0; wait_step<300; wait_step++ )); do
     host_start_line=$(sed -n '2p' "$active" || true)
     if [[ "$host_recorded_pid" =~ ^[0-9]+$ ]] &&
        kill -0 "$host_recorded_pid" 2>/dev/null &&
-       [[ "$host_start_line" =~ ^V=START\([0-9]+(,[0-9]+){8}\)$ ]]; then
+       [[ "$host_start_line" =~ ^V=START\([0-9]+(,[0-9]+){4}\)$ ]]; then
       ready=1
       break
     fi

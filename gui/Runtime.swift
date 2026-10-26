@@ -70,21 +70,30 @@ struct BundledRuntime {
             _ = try tar(["-xzf", archive.path, "-C", root.path,
                          "--no-same-owner", "--no-same-permissions"])
             try manager.removeItem(at: archive)
-            let executablePaths = Set(["node", "mac2jb-send", "mac2jb-commands"])
+            let executablePaths = Set(["node", "mac2jb-send", "mac2jb-commands",
+                                       "homebrew/bin/spirv-val", "homebrew/python/bin/python3",
+                                       "homebrew/python/bin/python3.13"])
             if let walker = manager.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
                 for case let url as URL in walker {
                     let properties = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
                     guard properties.isSymbolicLink != true else {
                         throw RuntimeError.invalid("The extracted runtime contains an unsupported link.")
                     }
-                    let isRootExecutable = url.deletingLastPathComponent().resolvingSymlinksInPath().path == root.path &&
-                        executablePaths.contains(url.lastPathComponent)
-                    let mode = properties.isDirectory == true || isRootExecutable ? 0o700 : 0o600
+                    let canonicalPath = url.resolvingSymlinksInPath().path
+                    guard canonicalPath.hasPrefix(root.path + "/") else {
+                        throw RuntimeError.invalid("The extracted runtime contains a path outside its session folder.")
+                    }
+                    let relativePath = String(canonicalPath.dropFirst(root.path.count + 1))
+                    let mode = properties.isDirectory == true || executablePaths.contains(relativePath) ? 0o700 : 0o600
                     try manager.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
                 }
             }
             for path in ["node", "mac2jb-send", "mac2jb-commands", "vendor/libusbd/libusbd.dylib",
-                         "scripts/gui-host.cjs", "scripts/install-driver.sh", "drivers/SHA256SUMS",
+                         "scripts/gui-host.cjs", "scripts/gui-session.cjs", "scripts/gui-dump.cjs",
+                         "scripts/gui-homebrew.cjs", "scripts/gui-stremio.cjs", "stremio/pipeline.cjs", "stremio/app/app.json", "scripts/check-homebrew-runtime.cjs",
+                         "homebrew/manifest.json", "homebrew/fonts/DejaVuSans.ttf",
+                         "vendor/HBLauncher/homebrew-launcher/launcher.cjs",
+                         "scripts/install-driver.sh", "drivers/SHA256SUMS",
                          "drivers/usbgadget.kext/Contents/MacOS/usbgadget",
                          "vendor/ns2jb/run.cjs", "assets/bootstrap.bas", "source/LICENSE"] {
                 guard manager.fileExists(atPath: root.appendingPathComponent(path).path) else {

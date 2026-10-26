@@ -1,0 +1,32 @@
+#version 450
+layout(local_size_x=1) in;
+layout(set=0,binding=0,std430) readonly buffer Controls {uint raw[];} c;
+layout(set=0,binding=1,std430) coherent buffer Media {uint m[];} media;
+void main() {
+    uint commit=media.m[4], slot=commit&3u, sequence=commit>>2u;
+    if(commit!=0u && slot<3u && commit!=media.m[32]) {
+        uint base=(4096u+slot*32768u)/4u;
+        if(media.m[base]==sequence) {
+            media.m[36]=media.m[base+1u];
+            memoryBarrierBuffer();
+            media.m[32]=commit;
+        }
+    }
+    uint buttons=(c.raw[8]&1u)!=0u?c.raw[2]:0u;
+    for(uint i=0u;i<4u;i++) {
+        uint base=512u+i*16u;
+        if((media.m[base+8u]&1u)!=0u)buttons|=media.m[base+2u];
+    }
+    uint pressed=buttons&~media.m[38];
+    media.m[38]=buttons;
+    media.m[35]=buttons;
+    media.m[33]++;
+    if(pressed!=0u) {
+        uint next=media.m[34]+1u, base=64u+((next-1u)&15u)*4u;
+        media.m[base+1u]=pressed;media.m[base+2u]=buttons;media.m[base+3u]=media.m[33];
+        memoryBarrierBuffer();
+        media.m[base]=next;
+        memoryBarrierBuffer();
+        media.m[34]=next;
+    }
+}

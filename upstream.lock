@@ -1,4 +1,5 @@
 # Frozen upstream revisions (only changed by maintainer)
 libusbd 4fe5521e424061b823c3f7aebaa754150f94a821 https://github.com/shinyquagsire23/libusbd.git
 macos_usb_gadget_poc c8349b449a2171c1b5b7c59b882728b130fc6b88 https://github.com/shinyquagsire23/macos_usb_gadget_poc.git
-ns2jb 95f5525089273c5fce0b95047f3600f8442e96ae https://gitlab.com/pepsipu/ns2jb.git
+ns2jb eb2bdec8f3907c5830eb01fb9d55797af7403579 https://gitlab.com/kurumuz/ns2jb.git
+HBLauncher b40723be04baa51e5d1f121a1e2242c4167b6cbc https://github.com/ravensclawx/HBLauncher.git

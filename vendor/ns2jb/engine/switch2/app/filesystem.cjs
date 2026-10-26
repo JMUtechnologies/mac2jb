@@ -116,12 +116,12 @@ async function fileSize(s, handle) {
   return reply.data.readBigUInt64LE();
 }
 
-async function listDirectory(s, handle, filename = '/') {
+async function listDirectory(s, handle, filename = '/', maxEntries = 128) {
   const opened = await pathMethod(s, handle, 9, filename, u32(3));
   const directory = domain.oneHandle(opened);
   const entries = [];
   try {
-    while (entries.length < 128) {
+    while (entries.length < maxEntries) {
       const reply = await s.ipc('ReadDirectory', directory, 0, Buffer.alloc(0),
         {receive: [{address: s.base + 0x6000, size: 4 * 0x310, mode: 0}]});
       check(!reply.result, 'Directory read failed');
@@ -137,7 +137,7 @@ async function listDirectory(s, handle, filename = '/') {
         entries.push({name, type: entry[0x304], size: entry.readBigUInt64LE(0x308).toString()});
       }
     }
-    throw Error('Directory exceeds the 128-entry probe limit');
+    throw Error('Directory exceeds the ' + maxEntries + '-entry probe limit');
   } finally {await s.close(directory);}
 }
 

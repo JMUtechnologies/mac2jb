@@ -1,11 +1,11 @@
 const http = require('node:http');
 const path = require('node:path');
-const {port, token, addresses} = require('../connection.json');
+const {port, addresses} = require('../connection.json');
 
 function request(body) {
   return new Promise((resolve, reject) => {
     const req = http.request({host: '127.0.0.1', port, path: '/', method: 'POST',
-      headers: {authorization: 'Bearer ' + token, 'content-type': 'application/json'}}, res => {
+      headers: {'content-type': 'application/json'}}, res => {
       const parts = [];
       res.on('data', part => parts.push(part));
       res.on('error', reject);
@@ -17,7 +17,7 @@ function request(body) {
         } catch (error) {reject(error);}
       });
     });
-    req.setTimeout(60000, () => req.destroy(Error('Native request timed out; it was not replayed')));
+    req.setTimeout(180000, () => req.destroy(Error('Native request timed out; it was not replayed')));
     req.on('error', reject);
     req.end(JSON.stringify(body, (_, value) => typeof value === 'bigint' ? value.toString() : value));
   });

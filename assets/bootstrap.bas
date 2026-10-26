@@ -1,3 +1,8 @@
+' Switch 2 / SmileBASIC 4.4.9 bootstrap. See README before RUN.
+' Addresses are rediscovered; headers, native code and the SDK CRC are checked.
+' REMOVE is issued once from Direct mode after RUN; its handled error is expected.
+' START verifies the bootstrap, connects to the computer and runs the demo.
+
 VAR NSR,B#,C#,T#,SH#,S#,M#,D#,G#,MM#,H$,QF$,GH$,DP$,CP$
 VAR PHASE=0,FD=-1,POOL#=0,ZERO$=CHR$(0),I
 FOR I=1 TO 18:ZERO$=ZERO$+ZERO$:NEXT
@@ -174,7 +179,7 @@ COMMON DEF BOOT()
  DUMP P$(B#)+P$(C#)+P$(T#)+P$(SH#)+P$(S#)+P$(M#)+P$(D#)+P$(G#)+P$(MM#)
  PRINT "BOOT OK",CRC#:RETURN 1
 END
-COMMON DEF START(PORT,A,B,C,D,T0#,T1#,T2#,T3#)
+COMMON DEF START(PORT,A,B,C,D)
  VAR R#,J,A$,HELLO$
  IF !BOOT() THEN RETURN 0
  IF PHASE!=2 OR PORT<1024 OR PORT>65535 THEN RETURN FAIL(50)
@@ -199,7 +204,7 @@ COMMON DEF START(PORT,A,B,C,D,T0#,T1#,T2#,T3#)
  COPY NSR[1],&H2900,A$
  IF CALL#(&H147AF0,FD,S#+&H5200,16,0)!=0 THEN RETURN FAIL(58)
  HELLO$=P$(&H31545344)+P$(1)+P$(2)+P$(S#)+P$(&H80000)+P$(M#)+P$(D#)+P$(G#)+P$(MM#)+P$(B#)+P$(C#)
- HELLO$=HELLO$+P$(T0#)+P$(T1#)+P$(T2#)+P$(T3#)+P$(3925528160)
+ HELLO$=HELLO$+P$(0)+P$(0)+P$(0)+P$(0)+P$(3925528160)
  COPY NSR[1],&H2A00,HELLO$
  IF CALL#(&H140BD0,FD,S#+&H5400,128,0)!=128 THEN RETURN FAIL(59)
  PHASE=4:PRINT "HOST CONNECTED":RETURN RPC()

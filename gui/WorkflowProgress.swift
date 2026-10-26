@@ -48,6 +48,13 @@ struct WorkflowProgress: Equatable {
         states = [.complete, .complete, .active]
     }
 
+    mutating func bootstrapOnlySaved() {
+        guard !terminal, activeStage == .bootstrap, awaitingSave else { return }
+        terminal = true
+        awaitingSave = false
+        states = [.complete, .complete, .pending]
+    }
+
     mutating func complete() {
         guard !terminal, activeStage == .run else { return }
         terminal = true

@@ -2,6 +2,35 @@ Thank you Codex for dutifully packaging the exploits for distribution. No, I hav
 
 # Switch 2 FS demo
 
+## What this fork improves
+
+This fork aims to make the exploit work across the two Switch 2 memory layouts
+we observed before and after installing the microSD Express support update. The
+original could get through the initial exploit, then fail while starting its
+native helper; this fork adapts to either observed layout.
+
+To check for the microSD Express support update, open **System Settings →
+Support/Health & Safety** and look at item 3. On our test console it showed
+**(B)** after the update. If yours shows **(B)**, use this fork: the original
+fixed-layout version may fail on the layout we observed after the update. This
+fork also supports the layout we observed before the update, so you can use it
+even if item 3 does not show **(B)**.
+
+It also reduces some avoidable failures: it spends less time searching memory,
+gives timing-sensitive steps more bounded chances to succeed, accepts a valid
+memory pattern the original rejected, and handles leftover temporary files
+from interrupted runs. A free-space check that could reject exactly enough
+space is fixed, and failures produce more useful diagnostics.
+
+These changes improve compatibility and recovery, but the exploit is still
+timing-sensitive. They are not a guarantee that every attempt—or every
+console—will succeed.
+
+The host now waits up to 3 minutes of inactivity for a native-bridge request
+and up to 2 minutes for each console response after pairing. The initial
+console greeting still has a 10-second limit. These longer waits can avoid
+aborting a slow request that would work otherwise.
+
 Runs two small native functions inside FS, checks their results, and restores the
 original instructions. Switch 2 only; no npm install or compiler needed.
 
@@ -38,13 +67,94 @@ import file; there is no published download key.
    Confirm the load. The **Out of memory** message from `REMOVE` is expected.
    Then enter the **`V=START(...)`** line printed by the computer.
 
+   If SmileBASIC says **Wrong number of arguments**, your saved `NS2` may be
+   the older nine-argument bootstrap. Use the second `V=START(...)` line the
+   computer prints: it has the same port and four IP numbers, followed by
+   `,0,0,0,0`. Do **not** repeat `RUN` or `REMOVE`; enter just that replacement
+   `START` command while the computer is still waiting. The `bootstrap.bas`
+   supplied with this repo uses the normal five-argument form, so alternatively
+   you can rewrite the bootstrap.
+
 Keep SmileBASIC open and the computer awake until **FS execution verified**.
 Restart the console when finished; that also restores the original RO process.
 This demo does not install custom firmware or persistence.
 
+## Optional held RPC
+
+To keep the same SmileBASIC-backed RPC available after the 4/4 checks, start a
+fresh run with `node run.cjs --rpc [computer-IP]`. If you use the local keyboard
+launcher, run `./connect-upstream.sh --rpc [computer-IP]` from its parent folder.
+The normal run still closes its RPC after verification.
+
+Once 4/4 is verified, the runner prints its `runs/switch2-*` folder and stays
+open. In this mode it keeps both the SmileBASIC RPC and the existing FS memory
+endpoint alive; it does not retire the FS worker after verification. The FS
+instruction changes have already been restored, and the temporary RO donor
+files have been cleaned up. In another terminal, check the connection with:
+
+```sh
+node rpc.cjs runs/switch2-RUNID status
+```
+
+The client also accepts one JSON bridge request, for example
+`node rpc.cjs runs/switch2-RUNID '{"command":"query","address":4294967296}'`.
+This is the existing native RPC, not a new process or unrestricted FS API.
+It can read or change live process memory; incorrect calls can crash the app or
+console. Requests are serialized, and a timed-out native request must not be
+replayed because its outcome is uncertain. The bridge listens only on the PC's
+loopback interface; it has no authentication, so use a trusted PC and stop it
+when finished.
+
+Keep SmileBASIC open. This RPC does **not** survive fully closing the app or a
+console restart. Press Ctrl-C in the runner terminal when finished; only then
+does the runner retire the FS endpoint and close the bridge and console
+connection. A disconnect also ends the held run and attempts cleanup. A failed
+or interrupted cleanup may require a console restart. Tools that use the FS
+endpoint must finish their requests before the held run is stopped.
+
 If a run fails, keep the `runs` folder and restart the console before trying
 again. Enter `REMOVE` only once per application process. Logs and temporary
 memory captures stay in `runs`; they are not part of the distributable.
+
+## Optional system-code dump
+
+To capture installed system-program code from your own console, use this
+command **instead of** `node run.cjs` for a fresh attempt:
+
+```sh
+node dump-firmware.cjs [computer-IP]
+```
+
+Follow the same SmileBASIC steps above. The command first completes the normal
+4/4 exploit and verifies that the temporary FS instruction changes were
+restored. Before the runner closes its RPC, it asks NCM for the installed,
+full system-program IDs and reads each accessible CodeFS `main.npdm` and `main`
+file. If the dump completes, it then performs the normal exploit cleanup. You
+do not need to race to start a second command after 4/4; the ordinary `run.cjs`
+closes its RPC at the end. `node run.cjs --dump-firmware [computer-IP]` is
+equivalent. You can combine `--dump-firmware --rpc` to hold the RPC after the
+dump finishes.
+
+The output is in the repo-root `dumps/` directory. Open
+`dumps/firmware-dump.json` for the title inventory, per-file SHA-256 hashes,
+and entries whose CodeFS was unavailable. Captured files are in
+`dumps/<title-id>/` directories, alongside `dumps/ncm-system-programs.bin`.
+Starting another firmware-dump run clears the previous `dumps/` contents;
+ordinary `run.cjs` runs do not touch them. An unrecognized nonempty `dumps/`
+directory is never cleared automatically. Copy any partial or completed dump
+you want to keep before starting another dump run. Run logs remain in `runs/`.
+
+At startup, the runner checks the roots of SmileBASIC's inspected `save` and
+`tmp` mounts and deletes every file or directory whose name starts with
+`NS2_GAP`. Directories are deleted recursively. This no longer depends on
+previous run reports or checks the entry's contents, so do not keep personal
+files with that prefix on either mount. Other names and mounts are untouched;
+the runner does not wipe all of `tmp`.
+
+The metadata probe now selects a 16 KiB or 4 KiB window from the observed
+allocator link, and the later layout check validates the captured SDK page
+while discovering the domain vtable independently. These paths matched saved
+hardware captures from both observed layouts.
 
 Physically tested on October 21, 2026: both FS instruction challenges,
 restoration, and cleanup passed. Acquisition is timing-sensitive: the test

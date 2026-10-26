@@ -180,6 +180,15 @@ static unsigned char *read_text(const char *path, size_t *length) {
     if(fread(buf,1,(size_t)count,f)!=(size_t)count){fprintf(stderr,"Cannot read file\n");free(buf);fclose(f);return NULL;}
     fclose(f); *length=(size_t)count; return buf;
 }
+static void bootstrap_line_progress(bool complete, size_t line, size_t total) {
+#ifdef MAC2JB_GUI
+    printf("MAC2JB_GUI {\"type\":\"line-%s\",\"line\":%zu,\"completed\":%zu,\"total\":%zu}\n",
+           complete ? "complete" : "start", line, complete ? line : line-1, total);
+#else
+    printf("%s line %zu of %zu\n", complete ? "Sent" : "Typing", line, total);
+#endif
+    fflush(stdout);
+}
 static void usage(const char *exe) { fprintf(stderr,"usage: %s <file> [--dry-run] [--delay-ms N]\n",exe); }
 int main(int argc, char **argv) {
     if(argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) { usage(argv[0]); return 0; }
@@ -204,6 +213,7 @@ int main(int argc, char **argv) {
         }
         characters++; if(data[i]=='\n')lines++;
     }
+    size_t total_lines=lines + (bytes>0 && data[bytes-1]!='\n' ? 1 : 0);
     printf("Verified %zu input bytes, %zu keystrokes, %zu newline(s).\n",bytes,characters,lines);
     if(dry){puts("Dry run complete; no USB device created and no keys sent.");free(data);return 0;}
 #ifdef MAC2JB_GUI
@@ -274,6 +284,7 @@ int main(int argc, char **argv) {
         // A Windows CRLF is one Enter; not an extra keypress.
         if(data[i]=='\r' && i+1<bytes && data[i+1]=='\n') { i++; continue; }
         if(line_start) {
+            bootstrap_line_progress(false,sent_lines+1,total_lines);
             size_t desired=0;
             while(i+desired<bytes && data[i+desired]==' ') desired++;
             // Only delete whitespace that is expected to exist after Enter.
@@ -294,7 +305,13 @@ int main(int argc, char **argv) {
             // Spaces have already been added or retained in the editor.
             i += desired;
             line_start=false;
-            if(i>=bytes || interrupted) break;
+            if(i>=bytes || interrupted) {
+                if(!interrupted && i>=bytes) {
+                    sent_lines++;
+                    bootstrap_line_progress(true,sent_lines,total_lines);
+                }
+                break;
+            }
         }
         unsigned char c=data[i++];
         if(c=='\r' && i<bytes && data[i]=='\n') continue;
@@ -303,11 +320,12 @@ int main(int argc, char **argv) {
             fprintf(stderr,"Transfer stopped at input offset %zu; target content may be partial.\n",i-1);
             goto done;
         }
-        if(c=='\n') {
+        if(interrupted) break;
+        if(c=='\n' || i>=bytes) {
             sent_lines++;
-            printf("\rSent line %zu",sent_lines); fflush(stdout);
+            bootstrap_line_progress(true,sent_lines,total_lines);
             // Enter carries this line's leading indentation unchanged.
-            line_start=true;
+            if(c=='\n') line_start=true;
         }
     }
     printf("\nindent adjustments: %zu (inherited-space mode)\n", adjustments);
