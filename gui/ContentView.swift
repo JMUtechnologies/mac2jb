@@ -23,7 +23,7 @@ struct ContentView: View {
     }
     private var timingSettingsValid: Bool {
         (1...2000).contains(model.keyDelayMs) && (1...120).contains(model.enumerationTimeoutSeconds) &&
-        [model.loadConfirmWaitMs, model.loadWaitMs, model.runWaitMs, model.removeWaitMs]
+        [model.effectiveLoadConfirmWaitMs, model.loadWaitMs, model.runWaitMs, model.removeWaitMs]
             .allSatisfy { (0...120000).contains($0) }
     }
     private var headline: String {
@@ -88,6 +88,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: model.runMode) { _, _ in readyConfirmed = false }
+        .onChange(of: model.usesDemo) { _, _ in readyConfirmed = false }
         .onChange(of: updater.state) { _, state in if state == .failed { showUpdateFailure = true } }
         .alert("The session needs attention", isPresented: $showFailure) {
             if model.diagnosticLogURL != nil {
@@ -232,9 +233,16 @@ struct ContentView: View {
             panel {
                 VStack(alignment: .leading, spacing: 16) {
                     eyebrow("01 / STARTING POINT")
+                    Toggle("I’m using the SmileBASIC demo", isOn: Binding(
+                        get: { model.usesDemo }, set: { model.setUsesDemo($0) }))
+                        .toggleStyle(.checkbox).font(.system(size: 12, weight: .medium))
+                    Text(model.usesDemo
+                         ? "Uses SAVEV to save the bootstrap and LOADV to restore it. This choice is remembered for later runs."
+                         : "Uses the full version’s SAVE and LOAD commands.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                     modeCard(.bootstrapOnly)
                     Divider()
-                    Text("Already have bootstrap.bas saved to slot 0 as NS2?")
+                    Text(model.usesDemo ? "Already saved your bootstrap as TXT:NS2 using SAVEV?" : "Already have bootstrap.bas saved to slot 0 as NS2?")
                         .font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
                     HStack(alignment: .top, spacing: 10) {
                         modeCard(.exploitOnly)
@@ -272,12 +280,16 @@ struct ContentView: View {
                             timingField("Enumeration timeout per controller", units: "s", value: $model.enumerationTimeoutSeconds, range: 1...120)
                             Divider()
                             Text("Post-bootstrap waits").font(.system(size: 11, weight: .semibold)).foregroundStyle(ink)
-                            timingField("Before confirming LOAD (YES)", units: "ms", value: $model.loadConfirmWaitMs, range: 0...120000)
+                            if !model.usesDemo {
+                                timingField("Before confirming LOAD (YES)", units: "ms", value: $model.loadConfirmWaitMs, range: 0...120000)
+                            }
                             timingField("After LOAD → before RUN", units: "ms", value: $model.loadWaitMs, range: 0...120000)
                             timingField("After RUN → before REMOVE", units: "ms", value: $model.runWaitMs, range: 0...120000)
                             timingField("After REMOVE → before START", units: "ms", value: $model.removeWaitMs, range: 0...120000)
                             HStack {
-                                Text("Defaults: 50 ms/key · 4 s enumeration · 1 s LOAD confirmation · 3 s between commands.")
+                                Text(model.usesDemo
+                                     ? "Defaults: 50 ms/key · 4 s enumeration · 3 s between commands. Demo LOADV skips the LOAD confirmation."
+                                     : "Defaults: 50 ms/key · 4 s enumeration · 1 s LOAD confirmation · 3 s between commands.")
                                     .font(.system(size: 10)).fixedSize(horizontal: false, vertical: true)
                                 Spacer(minLength: 8)
                                 Button("Reset defaults") {
@@ -312,7 +324,9 @@ struct ContentView: View {
                         if model.fullInstall {
                             Text("On the Switch: open SmileBASIC, then **Make a Program** with an empty editor. Leave the editor open while the bootstrap is typed.")
                         } else {
-                            Text("On the Switch: **restart the console → open SmileBASIC → enter Direct mode**. The fork’s five-argument bootstrap must already be saved as **NS2 in slot 0**. mac2jb loads it automatically.")
+                            Text(model.usesDemo
+                                 ? "On the Switch: **restart the console → open the SmileBASIC demo → enter Direct mode**. The fork’s five-argument bootstrap must already be saved as **TXT:NS2 using SAVEV**. mac2jb restores it into slot 0 automatically."
+                                 : "On the Switch: **restart the console → open SmileBASIC → enter Direct mode**. The fork’s five-argument bootstrap must already be saved as **NS2 in slot 0**. mac2jb loads it automatically.")
                         }
                     }
                         .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -373,9 +387,11 @@ struct ContentView: View {
                 if model.isEnumerating { powerDirectionNotice }
                 if model.phase == .awaitingSave {
                     Divider()
-                    Text("The bootstrap has finished typing. Enter **Direct mode**, type `SAVE \"NS2\"`, and save it in **slot 0**. Return to the start screen after saving; then choose an exploit mode for a separate run.")
+                    Text(model.activeEdition.saveInstructions)
                         .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    Toggle("NS2 is saved in slot 0 and I have entered Direct mode", isOn: $savedConfirmed)
+                    Text(model.activeEdition.saveCommands.joined(separator: "\n"))
+                        .font(.system(size: 13, design: .monospaced)).textSelection(.enabled)
+                    Toggle(model.activeEdition.savedConfirmation, isOn: $savedConfirmed)
                         .toggleStyle(.checkbox).font(.system(size: 12, weight: .medium))
                     Button("NS2 saved — back to start") { model.finishBootstrapOnly() }
                         .buttonStyle(PrimaryActionStyle()).fixedSize().disabled(!savedConfirmed || model.hasLiveWorkers)

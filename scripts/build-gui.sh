@@ -41,7 +41,9 @@ bash scripts/install-driver.sh --verify
 # builder's newer default deployment target. The regular CLI defaults stay as-is.
 MACOSX_DEPLOYMENT_TARGET=14.0 make -B
 
-STAGE="$(mktemp -d "$BUILD/stage.XXXXXX")"
+# Keep signing inputs outside Documents/Desktop folders, where Finder or sync
+# services can attach metadata that codesign rejects as resource-fork detritus.
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mac2jb-gui.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 PAYLOAD="$STAGE/runtime"
 mkdir -p "$PAYLOAD/vendor/libusbd" "$PAYLOAD/licenses"
@@ -190,10 +192,12 @@ xcrun swiftc -parse-as-library -swift-version 5 -target arm64-apple-macos14.0 -O
   -module-cache-path "$BUILD/module-cache" -framework SwiftUI -framework AppKit \
   gui/KeyboardMark.swift scripts/make-app-icon.swift -o "$BUILD/make-app-icon"
 "$BUILD/make-app-icon" "$BUILD/mac2jb.iconset" "$STAGE/mac2jb.app/Contents/Resources/mac2jb.icns"
+xattr -cr "$STAGE/mac2jb.app"
 codesign --force --sign - "$STAGE/mac2jb.app"
 codesign --verify --strict "$STAGE/mac2jb.app"
 mkdir -p "$(dirname "$APP_OUTPUT")"
 if [[ -e "$APP_OUTPUT" ]]; then rm -rf "$APP_OUTPUT"; fi
 mv "$STAGE/mac2jb.app" "$APP_OUTPUT"
+codesign --verify --deep --strict "$APP_OUTPUT"
 echo "Created GUI app: $APP_OUTPUT"
 echo "Corresponding source: $SOURCE_ARCHIVE"

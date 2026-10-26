@@ -4,8 +4,12 @@ The pinned source revisions and project URLs are listed in `../upstream.lock`.
 The MIT licenses and APSL 2.0 license texts are retained alongside the relevant
 source files. Root `LICENSE` does not override third-party terms.
 
-- **libusbd:** based on upstream libusbd, with two local modifications in
-  `Makefile` and `src/plat/macos/impl.c` documented by dated notices.
+- **libusbd:** based on the upstream revision in `upstream.lock`, with dated
+  downstream changes in `Makefile` and `src/plat/macos/impl.c`, plus a
+  **2026-10-26** IOKit service-handle ownership fix in
+  `src/plat/macos/alt_IOUSBDeviceControllerLib.c`. The wrapper retains its own
+  service reference and balances its release; the original author credits and
+  licenses remain. The pin records the upstream origin, not an unmodified tree.
 - **macos_usb_gadget_poc:** intentionally trimmed upstream source. Contains
   `usbgadget/` (MIT-licensed kernel extension source and Xcode project), plus
   provenance README and APSL text. The unused `usb_device/` proof of concept,

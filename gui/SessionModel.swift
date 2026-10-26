@@ -45,6 +45,9 @@ private struct GUIEvent: Decodable {
     @Published var controller = "auto"
     @Published private(set) var runMode: SessionRunMode = .exploitOnly
     @Published private(set) var activeRunMode: SessionRunMode = .exploitOnly
+    @Published private(set) var usesDemo = UserDefaults.standard.bool(forKey: "smileBASICDemo")
+    @Published private(set) var activeEdition: SmileBASICEdition = .full
+    var selectedEdition: SmileBASICEdition { usesDemo ? .demo : .full }
     var fullInstall: Bool { runMode == .bootstrapOnly }
     @Published var keyDelayMs = 50
     @Published var enumerationTimeoutSeconds = 4
@@ -52,6 +55,7 @@ private struct GUIEvent: Decodable {
     @Published var runWaitMs = 3000
     @Published var removeWaitMs = 3000
     @Published var loadConfirmWaitMs = 1000
+    var effectiveLoadConfirmWaitMs: Int { usesDemo ? 0 : loadConfirmWaitMs }
     @Published var driverStatus = "Checking the USB gadget driver…"
     @Published var driverInstalled = false
     @Published var driverLoaded = false
@@ -113,6 +117,13 @@ private struct GUIEvent: Decodable {
         guard !isBusy, phase != .awaitingSave, !hasLiveWorkers, !driverSetupRunning else { return }
         runMode = mode
         workflowProgress.selectMode(fullInstall: mode == .bootstrapOnly)
+    }
+
+    func setUsesDemo(_ enabled: Bool) {
+        guard [.ready, .failed, .cancelled].contains(phase),
+              !hasLiveWorkers, !driverSetupRunning else { return }
+        usesDemo = enabled
+        UserDefaults.standard.set(enabled, forKey: "smileBASICDemo")
     }
 
     var canRestartForUpdate: Bool {
@@ -193,11 +204,12 @@ private struct GUIEvent: Decodable {
             }
         }
         guard (1...2000).contains(keyDelayMs), (1...120).contains(enumerationTimeoutSeconds),
-              [loadWaitMs, runWaitMs, removeWaitMs, loadConfirmWaitMs].allSatisfy({ (0...120000).contains($0) }) else {
+              [loadWaitMs, runWaitMs, removeWaitMs, effectiveLoadConfirmWaitMs].allSatisfy({ (0...120000).contains($0) }) else {
             fail("Use 1–2000 ms per key, 1–120 seconds for enumeration, and 0–120000 ms for each command wait.")
             return
         }
         activeRunMode = runMode
+        activeEdition = selectedEdition
         workflowProgress.begin(fullInstall: activeRunMode == .bootstrapOnly)
         // Keep the Mac awake through typing, the save checkpoint, and host
         // verification. This assertion is scoped to this session only.
@@ -213,7 +225,7 @@ private struct GUIEvent: Decodable {
         resetBootstrapTiming()
         hostStageLabel = "Waiting for the Switch to connect over the local network"
         hostStageProgress = nil
-        append("\(AppBuildIdentity.diagnosticLabel); mode=\(activeRunMode.rawValue); controller=\(controller); address=\(selectedAddress); keyDelayMs=\(keyDelayMs); enumerationTimeoutSeconds=\(enumerationTimeoutSeconds); loadConfirmWaitMs=\(loadConfirmWaitMs); loadWaitMs=\(loadWaitMs); runWaitMs=\(runWaitMs); removeWaitMs=\(removeWaitMs). Starting \(activeRunMode.title).")
+        append("\(AppBuildIdentity.diagnosticLabel); mode=\(activeRunMode.rawValue); edition=\(activeEdition.rawValue); controller=\(controller); address=\(selectedAddress); keyDelayMs=\(keyDelayMs); enumerationTimeoutSeconds=\(enumerationTimeoutSeconds); loadConfirmWaitMs=\(effectiveLoadConfirmWaitMs); loadWaitMs=\(loadWaitMs); runWaitMs=\(runWaitMs); removeWaitMs=\(removeWaitMs). Starting \(activeRunMode.title).")
         if activeRunMode == .bootstrapOnly { startHID("bootstrap", root: runtime.root) }
         else { startHost(root: runtime.root) }
     }
@@ -223,7 +235,9 @@ private struct GUIEvent: Decodable {
         workflowProgress.bootstrapOnlySaved()
         endSessionActivity()
         phase = .ready; status = "Bootstrap saved"
-        detail = "NS2 is saved in slot 0. Choose an exploit mode when you are ready to start a fresh console session."
+        detail = activeEdition == .demo
+            ? "TXT:NS2 is saved. Leave the demo checkbox selected; mac2jb will restore it into slot 0 with LOADV in each fresh exploit session."
+            : "NS2 is saved in slot 0. Choose an exploit mode when you are ready to start a fresh console session."
         progress = nil; progressLabel = ""
         append("Bootstrap-only workflow finished after the save checkpoint. No host was started.")
     }
@@ -377,10 +391,13 @@ private struct GUIEvent: Decodable {
         status = kind == "bootstrap" ? "Connecting the USB keyboard" : "Sending the four commands"
         detail = kind == "bootstrap" ? "Keep Make a Program open until the entire bootstrap has finished typing. Using \(keyDelayMs) ms per key." : "Keep Direct mode focused. Using \(keyDelayMs) ms per key. The expected Out of memory message after REMOVE is normal."
         progress = 0; progressLabel = "Waiting for the USB keyboard"; isEnumerating = true
-        launch(arguments: ["hid", kind, controller, String(keyDelayMs),
+        var arguments = ["hid", kind, controller, String(keyDelayMs),
             "--enumeration-timeout", String(enumerationTimeoutSeconds),
             "--load-wait-ms", String(loadWaitMs), "--run-wait-ms", String(runWaitMs),
-            "--remove-wait-ms", String(removeWaitMs), "--load-confirm-wait-ms", String(loadConfirmWaitMs)], role: "hid", root: root)
+            "--remove-wait-ms", String(removeWaitMs), "--load-confirm-wait-ms",
+            String(activeEdition == .demo ? 0 : loadConfirmWaitMs)]
+        if kind == "commands" { arguments += activeEdition.commandArguments }
+        launch(arguments: arguments, role: "hid", root: root)
     }
 
     private func launch(arguments: [String], role: String, root: URL) {
@@ -563,8 +580,9 @@ private struct GUIEvent: Decodable {
             if event.kind == "bootstrap" {
                 appendBootstrapDuration(outcome: "completed")
                 workflowProgress.bootstrapTransferred()
-                phase = .awaitingSave; status = "Save NS2 in slot 0"
-                detail = "The bootstrap has finished typing. Enter Direct mode, type SAVE \"NS2\", and save it in slot 0. Then return to the start screen."
+                phase = .awaitingSave
+                status = activeEdition == .demo ? "Save the NS2 text file" : "Save NS2 in slot 0"
+                detail = "The bootstrap is typed. Save it on the Switch using the instructions below."
                 progress = 1; progressLabel = "Bootstrap transfer complete"
             } else if !hostCompleted && !postRun.isActive {
                 phase = .waitingForConsole; status = hostStageLabel

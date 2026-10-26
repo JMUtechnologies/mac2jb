@@ -11,17 +11,24 @@ const root = path.resolve(__dirname, '..');
 const timingDefaults = Object.freeze({delay: 50, enumerationTimeout: 4, loadWaitMs: 3000,
   runWaitMs: 3000, removeWaitMs: 3000, loadConfirmWaitMs: 1000});
 function hidSettings(args) {
-  const settings = {...timingDefaults};
+  const settings = {...timingDefaults, demo: false};
   const values = [...args];
   if (values.length && !values[0].startsWith('--')) settings.delay = Number(values.shift());
   const options = {'--enumeration-timeout': 'enumerationTimeout', '--load-wait-ms': 'loadWaitMs',
     '--run-wait-ms': 'runWaitMs', '--remove-wait-ms': 'removeWaitMs', '--load-confirm-wait-ms': 'loadConfirmWaitMs'};
   while (values.length) {
-    const option = values.shift(), text = values.shift();
+    const option = values.shift();
+    if (option === '--demo') {
+      if (settings.demo) throw Error('Duplicate HID option: --demo');
+      settings.demo = true;
+      continue;
+    }
+    const text = values.shift();
     if (!options[option] || text === undefined || !/^\d+$/.test(text)) throw Error('Invalid HID timing option: ' + option);
     settings[options[option]] = Number(text);
   }
-  for (const [name, value] of Object.entries(settings)) {
+  for (const name of Object.keys(timingDefaults)) {
+    const value = settings[name];
     const minimum = name === 'delay' || name === 'enumerationTimeout' ? 1 : 0;
     const maximum = name === 'delay' ? 2000 : name === 'enumerationTimeout' ? 120 : 120000;
     if (!Number.isInteger(value) || value < minimum || value > maximum) throw Error(`Invalid ${name}: use ${minimum}..${maximum}.`);
@@ -135,7 +142,7 @@ async function host(address) {
 async function hid(kind, controller, settings = timingDefaults) {
   if (!['bootstrap', 'commands'].includes(kind)) throw Error('Invalid transfer kind.');
   if (controller !== 'auto' && !/^usb-drd(?:[0-9]|1[0-5])$/.test(controller)) throw Error('Choose a controller from 0 to 15.');
-  const {delay, enumerationTimeout, loadWaitMs, runWaitMs, removeWaitMs, loadConfirmWaitMs} = settings;
+  const {delay, enumerationTimeout, loadWaitMs, runWaitMs, removeWaitMs, loadConfirmWaitMs, demo = false} = settings;
   const candidates = controller === 'auto' ? ['usb-drd0', 'usb-drd1', 'usb-drd3'] : [controller];
   const bootstrap = fs.readFileSync(path.join(root, 'assets/bootstrap.bas'), 'utf8');
   const totalLines = (bootstrap.match(/\n/g) || []).length + (bootstrap && !bootstrap.endsWith('\n') ? 1 : 0);
@@ -146,7 +153,8 @@ async function hid(kind, controller, settings = timingDefaults) {
     const args = kind === 'bootstrap' ? ['assets/bootstrap.bas', '--delay-ms', String(delay)] : [
       '--auto', '--delay-ms', String(delay), '--gui-events', '--enumeration-timeout', String(enumerationTimeout),
       '--load-wait-ms', String(loadWaitMs), '--run-wait-ms', String(runWaitMs),
-      '--remove-wait-ms', String(removeWaitMs), '--load-confirm-wait-ms', String(loadConfirmWaitMs)];
+      '--remove-wait-ms', String(removeWaitMs), '--load-confirm-wait-ms', String(loadConfirmWaitMs),
+      ...(demo ? ['--demo'] : [])];
     current = spawn(executable, args, {cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       env: {...process.env, MAC2JB_AUTO_WORKER: '1', MAC2JB_CONTROLLER: candidate,
         MAC2JB_ENUMERATION_TIMEOUT_SECONDS: String(enumerationTimeout)}});
@@ -239,6 +247,14 @@ async function hid(kind, controller, settings = timingDefaults) {
     }
     if (stopping) break;
     if (code === 0 && !signal) {emit('transfer-complete', {kind, message: 'Keyboard transfer completed. Check the Switch screen.'}); return 0;}
+    if (signal && !timedOut) {
+      const helper = path.basename(executable);
+      emit('failed', {helper, signal, controller: candidate, partial: typing,
+        message: `USB helper ${helper} terminated by ${signal} on ${candidate}. ` +
+          'This does not establish that the USB driver is missing. Check macOS crash reports and the session logs. ' +
+          'Automatic retry was stopped.' + (typing ? ' Input may be partial. Inspect and clear the Switch input before trying again.' : '')});
+      return 1;
+    }
     if (typing) {
       emit('failed', {partial: true, message: 'Input may be partial. Automatic retry was stopped. Inspect and clear the Switch input before trying again.'}); return 1;
     }
@@ -268,7 +284,7 @@ async function main(args = process.argv.slice(2)) {
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
   if (args[0] === 'host' && args.length === 2) return host(args[1]);
   if (args[0] === 'hid' && args.length >= 3) return hid(args[1], args[2], hidSettings(args.slice(3)));
-  throw Error('Usage: gui-host.cjs host IPv4 | hid bootstrap|commands auto|usb-drdN [delay-ms]');
+  throw Error('Usage: gui-host.cjs host IPv4 | hid bootstrap|commands auto|usb-drdN [delay-ms] [--demo]');
 }
 module.exports = {validStart, verifiedResult, hidSettings, lines, main};
 if (require.main === module) main().then(code => {process.exitCode = code;}).catch(error => {

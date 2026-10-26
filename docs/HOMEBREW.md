@@ -1,6 +1,6 @@
 # Homebrew in mac2jb
 
-mac2jb v0.4.1 offers **HBLauncher v0.2.0** for GPU apps and **Stremio · experimental**
+mac2jb v0.4.2 offers **HBLauncher v0.2.0** for GPU apps and **Stremio · experimental**
 for Mac-assisted media playback. Choose one application per fresh Held RPC
 session. The Mac and SmileBASIC must stay open throughout use.
 
@@ -9,6 +9,9 @@ session. The Mac and SmileBASIC must stay open throughout use.
 1. Use the current five-argument [kurumuz bootstrap](../assets/bootstrap.bas),
    saved in **slot 0 as NS2**. An old nine-argument saved program must be replaced
    through **Type bootstrap only** or the CLI's **Full install** before proceeding.
+   If using the SmileBASIC demo, enable **I’m using the SmileBASIC demo** and use
+   the [demo save/load commands](../README.md#smilebasic-full-game-versus-demo).
+   Saving the bootstrap does not preserve the exploit or a live RPC session.
 2. **Restart the console**, open SmileBASIC in **Direct mode**, and choose
    **Held RPC** in mac2jb. The supported combination is Switch 2 system software
    **23.0.1**, **SmileBASIC 4.4.9**, and more than **20 MiB free** in its save.

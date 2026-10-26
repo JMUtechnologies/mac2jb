@@ -34,6 +34,9 @@ jobs:
           otool -L mac2jb-commands
           otool -L vendor/libusbd/libusbd.dylib
 
+      - name: Verify IOKit controller ownership without USB configuration
+        run: bash scripts/test-usb-controller-ownership.sh
+
       - name: Verify bootstrap integrity
         run: |
           shasum -a 256 -c assets/bootstrap.bas.sha256
@@ -105,6 +108,9 @@ jobs:
 
       - name: Verify start-screen session modes
         run: bash scripts/test-session-run-mode.sh
+
+      - name: Verify full/demo save prompts and native load commands
+        run: bash scripts/test-smilebasic-edition.sh
 
       - name: Verify Stremio account and Library fixtures without a real account
         run: bash scripts/test-stremio-account.sh

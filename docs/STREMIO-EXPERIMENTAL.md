@@ -1,6 +1,6 @@
 # Experimental Stremio-compatible player
 
-mac2jb v0.4.1 includes an experimental Mac-assisted player for its verified
+mac2jb v0.4.2 includes an experimental Mac-assisted player for its verified
 Held RPC session. The Mac requests real Stremio addon catalogs, metadata, episodes
 and streams, then decodes supported media. The Switch displays the menu and
 video through a GPU app and plays PCM audio through a new native audio adapter.
@@ -18,6 +18,8 @@ defines the catalog, metadata and stream requests it uses.
    uses that app's `ffmpeg` and `ffprobe` executables; these executables are not
    redistributed inside mac2jb. mac2jb does not install or update Stremio.
 2. Use the fork's current five-argument bootstrap, saved in **slot 0 as NS2**.
+   For a demo-capable GUI build, select **I’m using the SmileBASIC demo** if
+   applicable and follow the [demo save/load instructions](../README.md#smilebasic-full-game-versus-demo).
    Restart the console, open SmileBASIC in Direct mode, choose **Held RPC** in
    mac2jb and start a fresh exploit session.
 3. Wait for **4/4 verification** and confirmation that RPC is open. Under

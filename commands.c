@@ -114,12 +114,12 @@ static int gui_milliseconds(const char *text, int maximum, int *destination) {
     if (errno || end == text || *end || value < 0 || value > maximum) return -1;
     *destination = (int)value; return 0;
 }
-static int gui_timing_test(void) {
+static int gui_timing_test(bool demo) {
     const int waits[] = {gui_load_wait_ms, gui_run_wait_ms, gui_remove_wait_ms};
     for (int step=1; step<=4 && !interrupted; step++) {
         gui_command_event("command-start", step);
         gui_command_event("command-complete", step);
-        if (step == 1 && gui_wait(gui_load_confirm_wait_ms, "LOAD confirmation", 1)<0) return 1;
+        if (step == 1 && !demo && gui_wait(gui_load_confirm_wait_ms, "LOAD confirmation", 1)<0) return 1;
         if (step < 4 && gui_wait(waits[step-1], gui_command_names[step-1], step)<0) return 1;
     }
     return interrupted ? 1 : 0;
@@ -151,6 +151,7 @@ int main(int argc, char **argv) {
     int delay_ms=50;
     bool dry_run=false;
     bool automatic=false;
+    bool demo=false;
 #ifdef MAC2JB_GUI
     bool timing_test=false;
     gui_enumeration_seconds=mac2jb_gui_enumeration_timeout();
@@ -160,6 +161,7 @@ int main(int argc, char **argv) {
     for (int a=1; a<argc; a++) {
         if (strcmp(argv[a], "--dry-run") == 0) dry_run=true;
         else if (strcmp(argv[a], "--auto") == 0) automatic=true;
+        else if (strcmp(argv[a], "--demo") == 0) demo=true;
         else if (strcmp(argv[a], "--delay-ms") == 0 && a+1<argc) {
             char *end=NULL;
             long value=strtol(argv[++a], &end, 10);
@@ -188,7 +190,8 @@ int main(int argc, char **argv) {
         }
 #endif
         else if (!strcmp(argv[a], "--help") || !strcmp(argv[a], "-h")) {
-            puts("usage: ./mac2jb-commands [--auto] [--dry-run] [--delay-ms N]");
+            puts("usage: ./mac2jb-commands [--auto] [--demo] [--dry-run] [--delay-ms N]");
+            puts("--demo: restore saved NS2 into slot 0 with PRGEDIT/LOADV/PRGSET, without a LOAD confirmation Enter.");
 #ifdef MAC2JB_GUI
             puts("GUI build: [--gui-events] [--enumeration-timeout 1..120] [--load-confirm-wait-ms N] [--load-wait-ms N] [--run-wait-ms N] [--remove-wait-ms N]");
 #endif
@@ -198,10 +201,11 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
+    if (demo) steps[0] = "PRGEDIT 0:LOADV \"TXT:NS2\" OUT C$:PRGSET C$";
 #ifdef MAC2JB_GUI
     if (timing_test) {
         signal(SIGINT,on_interrupt); signal(SIGTERM,on_interrupt);
-        return gui_timing_test(); // Protocol check only: never initializes USB.
+        return gui_timing_test(demo); // Protocol check only: never initializes USB.
     }
 #endif
     char session_start[512] = {0};
@@ -225,6 +229,8 @@ int main(int argc, char **argv) {
     if (dry_run) {
         puts("These commands will be typed and submitted separately:");
         for (size_t i=0; i<4; ++i) printf("%zu: %s [Enter]\n", i+1, steps[i]);
+        puts(demo ? "Demo mode: LOADV restores slot 0 without an additional confirmation Enter." :
+                    "LOAD receives one additional Enter to accept its YES confirmation before RUN.");
         return 0;
     }
 
@@ -232,7 +238,7 @@ int main(int argc, char **argv) {
     puts("This sends keyboard input only; it does not start run.cjs on the Mac.");
     puts("Each approved command is submitted with Enter, in order.");
     puts("Keep the macOS host running in a separate Terminal window.");
-    if (!getenv("MAC2JB_AUTO_WORKER") && !approve("First, start run.cjs on your Mac; open fresh SmileBASIC, load the saved bootstrap, and focus its command entry."))
+    if (!getenv("MAC2JB_AUTO_WORKER") && !approve("First, start run.cjs on your Mac; open fresh SmileBASIC and focus its Direct-mode command entry."))
         return 1;
 
     if (!getenv("MAC2JB_AUTO_WORKER")) {
@@ -309,23 +315,26 @@ int main(int argc, char **argv) {
     if (gui_events) { puts("MAC2JB_GUI {\"type\":\"typing\",\"completed\":0,\"total\":4}"); fflush(stdout); }
     gui_command_event("command-start",1);
 #endif
-    if (!automatic && !approve("STEP 1/4: Focus SmileBASIC Direct mode. Send LOAD \"TXT:NS2\"?")) goto done;
+    if (!automatic && !approve(demo ?
+        "STEP 1/4: Focus SmileBASIC Demo Direct mode. Send PRGEDIT 0:LOADV \"TXT:NS2\" OUT C$:PRGSET C$?" :
+        "STEP 1/4: Focus SmileBASIC Direct mode. Send LOAD \"TXT:NS2\"?")) goto done;
     if (type_and_submit(ctx,iface,ep,steps[0],delay_ms)<0) goto done;
 #ifdef MAC2JB_GUI
     gui_command_event("command-complete",1);
 #endif
-    // SmileBASIC LOAD confirmation: the first Enter submits LOAD, this second
-    // Enter accepts the default YES in its confirmation dialogue.
-    // SmileBASIC LOAD confirmation
-    puts("Confirming SmileBASIC LOAD prompt (YES) with Enter...");
-    fflush(stdout);
+    // Only the full game's LOAD needs a second Enter for the default YES.
+    // Demo LOADV/PRGSET restores the program directly without that dialogue.
+    if (!demo) {
+        puts("Confirming SmileBASIC LOAD prompt (YES) with Enter...");
+        fflush(stdout);
 #ifdef MAC2JB_GUI
-    if (gui_wait(gui_load_confirm_wait_ms,"LOAD confirmation",1)<0) goto done;
+        if (gui_wait(gui_load_confirm_wait_ms,"LOAD confirmation",1)<0) goto done;
 #else
-    sleep(1); // allow the confirmation dialog to appear before accepting it
+        sleep(1); // allow the confirmation dialog to appear before accepting it
 #endif
-    if (interrupted || send_stroke(ctx, iface, ep, 0, 40, delay_ms)<0) goto done;
-    release_all_keys(ctx, iface, ep);
+        if (interrupted || send_stroke(ctx, iface, ep, 0, 40, delay_ms)<0) goto done;
+        release_all_keys(ctx, iface, ep);
+    }
 #ifdef MAC2JB_GUI
     if (automatic && gui_wait(gui_load_wait_ms,"LOAD",1)<0) goto done;
     gui_command_event("command-start",2);

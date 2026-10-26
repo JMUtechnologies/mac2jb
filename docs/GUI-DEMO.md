@@ -1,6 +1,6 @@
 # mac2jb GUI
 
-mac2jb v0.4.1 provides the ns2jb workflow, HBLauncher and an experimental
+mac2jb v0.4.2 provides the ns2jb workflow, HBLauncher and an experimental
 Stremio-compatible player. A completed Mac-side transfer does not prove that
 the console accepted the input or that ns2jb succeeded; the host independently
 verifies execution, restoration and cleanup.
@@ -13,7 +13,7 @@ completed count after that line finishes.
 
 ## Run the app
 
-On an **Apple Silicon Mac running macOS 14 or newer**, download [the v0.4.1 app ZIP](https://github.com/cpypwn/mac2jb/releases/download/v0.4.1/mac2jb-v0.4.1-macos-arm64.zip), extract it and open **mac2jb.app**. Its executable bundles the sender tools, Node.js runtime, host source, bootstrap, unsigned USB driver, and notices. The app also includes HBLauncher v0.2.0, ftpd-sb v0.1.0, and the required companion tools and fonts. You do not need a Pico, a separate Python or Node.js installation, Xcode, or command-line tools to run the prepared app. It extracts its embedded payload into a private session folder.
+On an **Apple Silicon Mac running macOS 14 or newer**, download [the v0.4.2 app ZIP](https://github.com/cpypwn/mac2jb/releases/download/v0.4.2/mac2jb-v0.4.2-macos-arm64.zip), extract it and open **mac2jb.app**. Its executable bundles the sender tools, Node.js runtime, host source, bootstrap, unsigned USB driver, and notices. The app also includes HBLauncher v0.2.0, ftpd-sb v0.1.0, and the required companion tools and fonts. You do not need a Pico, a separate Python or Node.js installation, Xcode, or command-line tools to run the prepared app. It extracts its embedded payload into a private session folder.
 
 The app is ad hoc signed, not Developer ID signed or notarized. If a downloaded copy is blocked by Gatekeeper, try opening it, then use **System Settings → Privacy & Security → Open Anyway**, if macOS offers it. See [Apple’s guidance for opening an app from an unidentified developer](https://support.apple.com/en-us/102445). Do not change kernel-security settings to address a Gatekeeper app warning.
 
@@ -33,20 +33,52 @@ are included in the prepared app.
 
 ## What the GUI handles
 
-Select the Mac’s IPv4 address on the same network as the Switch. The GUI keeps the host and its current pairing values together, selects a USB controller automatically, and sends the post-bootstrap commands. **Install & load driver…** installs the bundled unsigned driver through an administrator prompt, preserves an existing driver in a backup, and requests loading. Complete Recovery settings first, then any approval/restart prompts. The extra Enter for SmileBASIC’s `LOAD` confirmation is included. The expected **Out of memory** response after `REMOVE` is part of the upstream procedure.
+Select the Mac’s IPv4 address on the same network as the Switch. The GUI keeps the host and its current pairing values together, selects a USB controller automatically, and sends the post-bootstrap commands. **Install & load driver…** installs the bundled unsigned driver through an administrator prompt, preserves an existing driver in a backup, and requests loading. Complete Recovery settings first, then any approval/restart prompts. For the full game, the extra Enter for SmileBASIC’s `LOAD` confirmation is included. Demo mode uses `LOADV` without that confirmation Enter. The expected **Out of memory** response after `REMOVE` is part of the upstream procedure.
 
 ### Choose a mode before starting
+
+**SmileBASIC edition:** v0.4.2 adds **I’m using the
+SmileBASIC demo** above the bootstrap/exploit choices. This checkbox is off by
+default and remembered between launches. Select it for the demo; leave it
+unchecked for the full game. The selected edition stays fixed during a run.
 
 The start screen separates **Type bootstrap only** from the three choices for an `NS2` already saved in slot 0. Those three saved-bootstrap choices appear side by side. **Restart the console before every run**, then prepare SmileBASIC for the selected choice:
 
 | Choice | What happens |
 | --- | --- |
-| **Type bootstrap only** | Types the exact fork bootstrap into an empty SmileBASIC program editor. When typing finishes, save it as `NS2` in slot 0 and return to the start screen. It does not start a host or run the exploit. |
+| **Type bootstrap only** | Types the exact fork bootstrap into an empty SmileBASIC program editor. When typing finishes, manually save it using the commands for your selected edition, confirm the save prompt and return to the start screen. It does not save automatically, start a host or run the exploit. |
 | **NS2JB exploit only** | Loads the saved new `NS2`, sends RUN, REMOVE, and this host's START command, verifies execution and restoration, then releases resources and finishes. It does not hold RPC open. |
 | **Held RPC** | Runs the same saved-bootstrap exploit sequence, then keeps the verified RPC and FS endpoint available. Keep mac2jb and SmileBASIC open. Use **Check RPC** or copy the status command as needed, then choose **Finish session** to release resources and verify cleanup. |
 | **System-code dump** | Runs the same saved-bootstrap exploit sequence, captures accessible installed system-program `main` and `main.npdm` files with an inventory and hashes, then releases resources and finishes automatically. Choose **Open dump folder** after completion. |
 
-For **Type bootstrap only**, open **SmileBASIC → Make a Program** with an empty editor before starting. Allow approximately 7–10 minutes at the default typing speed. Wait until typing finishes; then enter **Direct mode**, type `SAVE "NS2"`, save it in **slot 0**, and return to the start screen. Restart the console before starting another choice.
+For **Type bootstrap only**, open **SmileBASIC → Make a Program** with an empty
+editor before starting. Allow approximately 7–10 minutes at the default typing
+speed. Wait until typing finishes, then enter **Direct mode**. The full game
+uses `SAVE "NS2"` with the bootstrap in slot 0. In the demo, manually enter these
+two commands in order:
+
+```basic
+PRGEDIT 0
+SAVEV "TXT:NS2", PRGGET$()
+```
+
+The GUI's save prompt shows the commands for the selected edition; it does not
+perform the save. After saving, confirm the prompt and return to the start
+screen. Restart the console before starting another choice.
+
+For demo exploit modes, mac2jb loads the saved bootstrap with this single line:
+
+```basic
+PRGEDIT 0:LOADV "TXT:NS2" OUT C$:PRGSET C$
+```
+
+It then sends `RUN`, `REMOVE`, and the matching five-argument START command.
+Demo `LOADV` skips the full game's LOAD-confirmation Enter. The full-game path
+continues to use `LOAD "TXT:NS2"` and its confirmation.
+
+The maintainer has confirmed manual demo save/load. Automated GUI demo loading
+still needs a console test. Saving the bootstrap does not retain the exploit
+or RPC connection; each exploit attempt needs a fresh console and host session.
 
 For the other three choices, first save the fork's new five-argument bootstrap as `NS2` in slot 0. **Restart the console → open SmileBASIC → enter Direct mode**, use Ethernet for the Switch 2 until Wi-Fi support is confirmed, select the Mac's IPv4 address on that network, then start. These choices use the saved program and do not type the bootstrap again.
 
@@ -97,11 +129,24 @@ media, account features and controls.
 
 Once a compatible driver is installed, approved, and loaded, the prepared application removes the need to build senders, install Node.js, open Terminal windows, copy pairing commands, or choose a controller by trial and error at the command line. The console-side preparation and verification checkpoints remain necessary.
 
+**Install & load driver…** refreshes the restart marker on every installation,
+even when the driver is loaded. Complete the requested restart after the latest
+install, then refresh the loaded-driver check. Avoid reinstalling just to check
+status; another install creates another restart requirement. This policy is
+unchanged.
+
+An unexpected USB helper crash is separate from a missing driver. Keep the
+reported helper name, signal and selected controller, the macOS crash report,
+and the folder opened by **Open session logs**. Repeated driver installation
+does not resolve a helper crash. Preserve the existing recovery rule: inspect
+and clear any partial bootstrap before retrying, and restart the console after
+post-bootstrap commands begin or an exploit attempt fails.
+
 ## GUI updates
 
 Use **mac2jb → Check for Updates…**, or leave **Check for Updates Automatically** enabled. Automatic checks run at launch if at least six hours have passed since the last successful check, then daily while the app stays open. Choose **Download update** and, after the current session/driver work finishes, **Restart & update**. The app verifies the download and app bundle, keeps a backup of the old app, and reopens the new version. A failed replacement restores the old app; errors show the private updater log path.
 
-Updating affects the app only. Drivers, Recovery settings, and existing session logs are left in place. Your app folder must be writable; macOS security checks remain in effect. The updater trusts the public mac2jb GitHub repository over HTTPS and validates GitHub digests and the release checksum file; the app remains ad-hoc signed. If your older app has no updater, download v0.4.1 manually. The CLI is updated separately.
+Updating affects the app only. Drivers, Recovery settings, and existing session logs are left in place. Your app folder must be writable; macOS security checks remain in effect. The updater trusts the public mac2jb GitHub repository over HTTPS and validates GitHub digests and the release checksum file; the app remains ad-hoc signed. If your older app has no updater, download v0.4.2 manually. The CLI is updated separately.
 
 ## Session data and distribution
 

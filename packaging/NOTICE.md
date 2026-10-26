@@ -1,4 +1,4 @@
-# mac2jb 0.4.1 packaging
+# mac2jb 0.4.2 packaging
 
 This release replaces the bundled ns2jb runtime with the complete
 `kurumuz/ns2jb` snapshot at `eb2bdec8f3907c5830eb01fb9d55797af7403579`.
@@ -11,6 +11,13 @@ an exact fully-disabled summary. macOS enforces filesystem and kernel-extension
 load policy; failed load requests retain the actual error and exit status.
 Compatible custom configurations are not rejected by the installer. Neither
 the installer nor GUI changes SIP, AMFI, or startup security.
+
+The GUI provides a remembered SmileBASIC demo checkbox. The program text sent
+as bootstrap is unchanged; after typing, demo users manually save it with
+PRGEDIT 0 and SAVEV "TXT:NS2", PRGGET$(). Demo exploit runs restore that text
+with PRGEDIT 0:LOADV "TXT:NS2" OUT C$:PRGSET C$ instead of the full game's LOAD
+command and confirmation Enter. The edition is captured when the run starts.
+Only the bootstrap text is saved; no exploit or live connection persists.
 
 The start screen separates bootstrap typing from three saved-NS2 session modes:
 exploit only, held RPC, and system-code capture. Each session mode runs a fresh
@@ -43,6 +50,17 @@ The maintainer confirmed Stremio startup and playback in the final test build;
 live account synchronization still needs separate confirmation. See
 `docs/STREMIO-EXPERIMENTAL.md` for setup, controls and validation limits.
 
+USB helper diagnostics distinguish unexpected signal termination from ordinary
+initialization failures and expected enumeration timeouts. A helper crash is
+not proof that the driver is missing; logs identify the helper, signal and
+controller without automatically replaying a possibly partial transfer.
+
+A user-provided report describes successful USB configuration, enumeration and
+cleanup with an empty input file after an equivalent ownership fix. That report
+sent no keystrokes and did not verify a full bootstrap transfer or exploit.
+Read-only ownership regression checks do not configure USB or establish physical
+hardware compatibility for this build.
+
 The dump adapter now obtains the acquisition report from the original full FS
 proof rather than expecting that field on the fork's short summary. It retains
 current-session path and proof checks, capture readback verification, and the
@@ -53,9 +71,8 @@ The app and complete source distribution include the tested unsigned local
 Its personal signing certificate has been removed. Source-build instructions
 and the vendor source/license remain included.
 
-SocraticBliss contributed feedback and guidance on simplifying driver setup and
-documenting the SIP requirement. The USB driver is by Max Thomas / ShinyQuagsire;
-its upstream author credits and licenses are retained.
+The USB driver is by Max Thomas / ShinyQuagsire; its upstream author credits
+and licenses are retained.
 
 The executable embeds the native mac2jb senders, libusbd, the pinned ns2jb
 snapshot, the bootstrap, and an Apple Silicon Node.js runtime. It extracts a
@@ -71,8 +88,12 @@ The root MIT license applies to mac2jb; it does not relicense third-party code.
 
 - libusbd: Max Thomas / ShinyQuagsire; MIT notice preserved, together with
   Apple-derived APSL 2.0 source notices and full license text. Existing dated
-  downstream modification notices are retained. This GUI build does not modify
-  the libusbd sources or its existing build configuration.
+  build/controller-selection changes remain. A downstream **2026-10-26** patch
+  to `src/plat/macos/alt_IOUSBDeviceControllerLib.c` gives the controller wrapper
+  an independent retained IOKit service reference, balances its release, and
+  handles null/cleared wrappers. The upstream origin and pin in `upstream.lock`
+  are unchanged; the local source is modified. This fixes a user-space library
+  ownership issue and does not change the bundled kernel extension.
 - macos_usb_gadget_poc: the documented, trimmed kernel-extension source and
   license texts remain included. The separately documented local prebuilt is
   under `drivers/`; the old upstream prebuilt is not used.

@@ -18,23 +18,42 @@ Uses an Apple Silicon Mac as a USB HID keyboard to type the [ns2jb](https://gitl
 
 This recommendation concerns **preserving the tested firmware/software versions**, not making the exploit safer or more reliable.
 
+## Before proceeding: SIP and USB driver requirements
+
+**The bundled USB driver is unsigned. Your Mac's SIP and startup-security configuration must permit unsigned kernel extensions before you can use mac2jb.**
+
+- **Kernel extensions:** In Recovery, enable **Startup Security Utility → Security Policy → Reduced Security → Allow user management of kernel extensions from identified developers**. Reduced Security alone does not permit this unsigned driver without a compatible SIP configuration.
+- **SIP:** The maintainer-tested setup uses `csrutil disable` in **macOS Recovery**, followed by a restart. Compatible partial/custom SIP configurations are also accepted; the installer does not require `csrutil status` to report fully disabled. If your driver already loads, keep your working configuration.
+- **Installed and loaded driver:** Install the bundled driver, complete any **Privacy & Security** approval and restart prompts, then refresh the GUI's driver check. **The driver must be reported as loaded before starting.** A file merely being installed is not sufficient.
+
+**Installing the driver once does not guarantee it will keep working after SIP
+is fully re-enabled.** Apple checks kext signatures before inclusion in the
+Auxiliary Kernel Collection (AuxKC) when SIP is on. Installation does not sign
+this unsigned driver; a later AuxKC rebuild may reject it. Installing and then
+re-enabling SIP, including behavior with a cached AuxKC, has not been verified here.
+Compatible partial/custom SIP configurations are a separate case. See
+[Apple's kernel-extension policy](https://support.apple.com/en-ca/guide/security/sec8e454101b/web).
+
+mac2jb does **not** change SIP, AMFI, or startup security for you. Disabling SIP reduces macOS protection. See the [driver installation steps](#install-the-bundled-usb-driver-recommended) and [Apple's SIP documentation](https://developer.apple.com/documentation/security/disabling-and-enabling-system-integrity-protection).
+
 ## Required: replace the old bootstrap
 
 **The old `bootstrap.bas` from previous mac2jb releases using pepsipu's original ns2jb has a nine-argument `START`. It will not work with this version or any future mac2jb release and must be replaced.**
 
-Replace it with the newly bundled [kurumuz bootstrap](assets/bootstrap.bas), which uses five-argument `START(PORT,A,B,C,D)`, and save it in **slot 0 as `NS2`**. Choose **Type bootstrap only** in the GUI, or **Full install** in the CLI to transmit the new bundled file. Replace any older saved `NS2` before running the exploit.
+Replace it with the newly bundled [kurumuz bootstrap](assets/bootstrap.bas), which uses five-argument `START(PORT,A,B,C,D)`, and save it in **slot 0 as `NS2`**. Choose **Type bootstrap only** in the GUI, or **Full install** in the CLI to transmit the new bundled file. Replace any older saved `NS2` before running the exploit. Demo users should follow the [demo save/load instructions](#smilebasic-full-game-versus-demo).
 
 ## Get mac2jb
 
-Download [mac2jb v0.4.1 for Apple Silicon](https://github.com/cpypwn/mac2jb/releases/download/v0.4.1/mac2jb-v0.4.1-macos-arm64.zip),
+Download [mac2jb v0.4.2 for Apple Silicon](https://github.com/cpypwn/mac2jb/releases/download/v0.4.2/mac2jb-v0.4.2-macos-arm64.zip),
 extract the ZIP, and open **mac2jb.app**. It requires **macOS 14 or newer** and
 bundles Node.js, the senders, the host, HBLauncher v0.2.0, ftpd-sb v0.1.0, and
 companion tools. The tested unsigned USB driver is included with the app and
 complete source distribution; complete the driver setup below before starting.
 See the [GUI guide](docs/GUI-DEMO.md).
 
-v0.4.1 uses the kurumuz ns2jb fork and adds a Mac-assisted experimental
-Stremio-compatible player. Stremio startup and playback have been confirmed on
+v0.4.2 adds demo-aware save prompts and automatic load commands. It uses the
+kurumuz ns2jb fork and includes a Mac-assisted experimental Stremio-compatible
+player. Stremio startup and playback have been confirmed on
 the supported console setup; account library and watch-progress sync still need
 live verification. Complete the [required bootstrap replacement](#required-replace-the-old-bootstrap),
 then follow the [Homebrew guide](docs/HOMEBREW.md) or
@@ -67,7 +86,7 @@ The tested **unsigned** prebuilt driver is at `drivers/usbgadget.kext`. Its sour
 vendor/macos_usb_gadget_poc/usbgadget/usbgadget.xcodeproj
 ```
 
-**macOS must permit loading the bundled unsigned driver.** Fully disabled SIP is the maintainer-tested setup, not an installer requirement. Compatible partial/custom SIP configurations are accepted: the installer logs `csrutil status` for diagnostics and lets macOS enforce the actual load policy. You do **not** need to compile or sign the driver. Complete any kernel-extension approval/restart prompts. mac2jb does not change SIP or AMFI. See [Apple's kernel security documentation](https://support.apple.com/guide/security/securely-extending-the-kernel-in-macos-sec8e454101b/web).
+**macOS must permit loading the bundled unsigned driver.** Fully disabled SIP is the maintainer-tested setup, not an installer requirement. Compatible partial/custom SIP configurations are accepted: the installer logs `csrutil status` for diagnostics and lets macOS enforce the actual load policy. You do **not** need to compile or sign the driver. Complete any kernel-extension approval/restart prompts. mac2jb does not change SIP or AMFI. See [Apple's kernel security documentation](https://support.apple.com/en-ca/guide/security/sec8e454101b/web).
 
 `make` builds the **mac2jb command-line utilities**, not the kernel extension. It does not install or approve a kext for you.
 
@@ -80,12 +99,18 @@ vendor/macos_usb_gadget_poc/usbgadget/usbgadget.xcodeproj
 
 The installer checks the bundled driver's SHA-256 hashes, installs it at `/Library/Extensions/usbgadget.kext` with `root:wheel` ownership, and requests loading with `kmutil`. An existing driver is moved to a uniquely named backup; its path is printed in activity/logs. The installer never changes SIP or Recovery settings. See [driver provenance and checksums](drivers/README.md).
 
+Each driver installation through **Install & load driver…** records a new restart requirement, even
+if the driver is already loaded. Complete the requested restart after the
+latest installation, then refresh the driver check. Use the refresh check to
+inspect status; repeatedly reinstalling can create another restart prompt.
+
 ## Run the GUI
 
 1. Confirm the USB driver is loaded and **restart the console before every run**.
-2. To enter or replace `NS2`, choose **Type bootstrap only** and begin with an empty SmileBASIC editor. When typing finishes, save the program as `NS2` in slot 0 and return to the start screen. This choice does not start the host or run the exploit.
-3. With the fork's new five-argument `NS2` saved, restart the console, open SmileBASIC in Direct mode, and choose **NS2JB exploit only**, **Held RPC**, or **System-code dump**. Use Ethernet for the Switch 2 until Wi-Fi support is confirmed, and select the Mac's IPv4 address on that network. Each choice loads NS2 and sends RUN, REMOVE, and the current START command.
-4. **NS2JB exploit only** verifies the exploit and finishes cleanup. **Held RPC** keeps the verified connection open until **Finish session**. **System-code dump** captures installed system code after verification, then finishes cleanup automatically. Keep the cable connected and SmileBASIC focused. See [the GUI guide](docs/GUI-DEMO.md#choose-a-mode-before-starting) and [session guidance](docs/GUI-DEMO.md).
+2. In the current demo-capable build, select **I’m using the SmileBASIC demo** before choosing a bootstrap or exploit action if you use the demo. It is off by default and remembered between launches. Leave it unchecked for the full game.
+3. To enter or replace `NS2`, choose **Type bootstrap only** and begin with an empty SmileBASIC editor. When typing finishes, enter **Direct mode** and save it manually: the full game uses `SAVE "NS2"`; the demo uses the [two commands below](#smilebasic-full-game-versus-demo). Confirm the save prompt in mac2jb and return to the start screen. mac2jb does not save the program for you or run the exploit during this action.
+4. With the fork's new five-argument `NS2` saved, restart the console, open SmileBASIC in Direct mode, and choose **NS2JB exploit only**, **Held RPC**, or **System-code dump**. Use Ethernet for the Switch 2 until Wi-Fi support is confirmed, and select the Mac's IPv4 address on that network. Each choice loads NS2 with the command for the selected edition, then sends RUN, REMOVE, and the current START command.
+5. **NS2JB exploit only** verifies the exploit and finishes cleanup. **Held RPC** keeps the verified connection open until **Finish session**. **System-code dump** captures installed system code after verification, then finishes cleanup automatically. Keep the cable connected and SmileBASIC focused. See [the GUI guide](docs/GUI-DEMO.md#choose-a-mode-before-starting).
 
 ## Homebrew
 
@@ -139,7 +164,7 @@ and custom builds](docs/HOMEBREW.md#adding-hblauncher-apps).
 
 ## Terminal launcher
 
-The terminal launcher provides the full bootstrap workflow and a shortcut for retrying an existing saved bootstrap. From the repository root:
+The terminal launcher provides the full-game bootstrap workflow and a shortcut for retrying an existing saved bootstrap. From the repository root:
 
 ```sh
 bash mac2jb.command
@@ -243,6 +268,7 @@ The USB driver needs to be loaded for mac2jb to work. After loading it, confirm 
 | --- | --- |
 | `scripts/host.sh: No such file or directory` | The local release extraction is incomplete. Restore the full `scripts/` directory from the repository; don't overwrite it with an empty one. |
 | USB doesn't enumerate | Check USB data cable, Mac-to-Switch charging direction, selected controller, driver load state, and Switch input focus. Replug if the Mac charges the Switch. |
+| USB helper terminates unexpectedly, or macOS reports a helper crash | Keep the named helper's macOS crash report and use **Open session logs**. A loaded driver and a user-space helper crash are separate conditions; the crash does not establish that the driver is missing. Repeated installation is not a remedy for a helper crash. |
 | `invalid MAC2JB_CONTROLLER 'auto'` | A version mismatch or launcher bug passed a literal `auto` to the driver. Use an explicit `usb-drdN` value or an updated launcher. |
 | Unexpected characters (`#` becomes `£`, `A` becomes `Q`, etc.), or a syntax error on bootstrap line 1 | Set the **Switch 2's USB Keyboard language to US English** under **System Settings → Controllers & Accessories**. Changing the Mac's layout does not fix it. Clear and resend the corrupted bootstrap after correcting the console setting; other punctuation may also be wrong. No edits to `sender.c` are needed. See [issue #3](https://github.com/cpypwn/mac2jb/issues/3). |
 | Pairing file already exists | The launcher should identify and stop only prior ns2jb hosts belonging to this installation before starting a new session, and clear stale pairing files without killing unrelated processes. Do not start a new attempt while an existing ns2jb session is performing work. |
@@ -252,30 +278,70 @@ The USB driver needs to be loaded for mac2jb to work. After loading it, confirm 
 | Display shows four command labels but Switch receives only three | Rebuild `mac2jb-commands` and check its `--dry-run` output. Do not rely on hardcoded launcher labels or an old executable left after a failed build. |
 | Host reports an FS acquisition, placement, or native execution failure | This is **ns2jb-stage behavior**, not proof of a USB typing failure. See upstream ns2jb documentation; the mac2jb maintainer cannot troubleshoot ns2jb internals. |
 
+Unexpected USB helper termination identifies the helper, termination signal
+and selected controller in the GUI diagnostics. Preserve those details
+and the crash report. After any possible partial typing, inspect and clear the
+editor before retrying; if post-bootstrap commands have started, restart the
+console before another attempt. Do not automatically replay the transfer.
+
 Run folders can include console memory captures and machine-specific information beyond the pairing command. Review those files before sharing a complete run folder.
 
 ## SmileBASIC full game versus demo
 
-The full game can save the bootstrap for later sessions. Historically, the demo was treated as unable to save it, so demo users were instructed to retransmit it each session.
+The maintainer has confirmed the demo's **manual save and load commands** below.
+v0.4.2 adds the matching GUI demo workflow. Its command bytes, ordering and
+Enter handling are covered by hardware-free tests; automated console use
+still needs separate confirmation.
 
-### Unverified demo save/load workaround
+### Full game
 
-A community-reported workaround uses the following commands as a possible way to persist a program in the demo:
+After bootstrap typing finishes, enter **Direct mode** with the program in
+slot 0 and save it with:
 
-**Save program:**
+```basic
+SAVE "NS2"
+```
+
+The normal load command remains `LOAD "TXT:NS2"`. The GUI accepts its loading
+confirmation with an extra Enter before continuing to `RUN`.
+
+### SmileBASIC demo
+
+In the demo-capable GUI, enable **I’m using the SmileBASIC demo** before choosing
+bootstrap typing or any exploit mode. The checkbox is unchecked by default and
+its setting is remembered between app launches. Select it for the demo and
+leave it unchecked for the full game.
+
+After typing finishes, enter **Direct mode** and manually enter these **two
+commands**, in order, to save the bootstrap text as `TXT:NS2`:
 
 ```basic
 PRGEDIT 0
-SAVEV "TXT:MYPROG", PRGGET$()
+SAVEV "TXT:NS2", PRGGET$()
 ```
 
-**Load program:**
+mac2jb displays these commands in its demo save prompt; it does not type or
+execute them automatically. Confirm the prompt only after you have saved the
+program, then return to the start screen.
+
+The demo load command is this **single line**:
 
 ```basic
-PRGEDIT 0:LOADV "TXT:MYPROG" OUT C$:PRGSET C$
+PRGEDIT 0:LOADV "TXT:NS2" OUT C$:PRGSET C$
 ```
 
-Replace `MYPROG` with your chosen name. For the ns2jb bootstrap, confirm that the correct code is present in slot 0 after loading, and run an integrity check if available.
+With the demo checkbox enabled, the GUI's exploit modes type that line before
+`RUN`, `REMOVE`, and the current host's START command. `LOADV` does not use the
+full game's LOAD-confirmation Enter. The bundled five-argument bootstrap is
+the same for both editions.
+
+Demo automation uses the GUI checkbox. The terminal launcher still uses the
+full-game LOAD workflow; use the manual demo command above when working
+outside the demo-capable GUI.
+
+Saving `NS2` preserves only the bootstrap text, not the exploit or a live RPC
+session. Restart the console and start a fresh host/exploit run for every
+attempt, even when loading a previously saved bootstrap.
 
 ## Manual USB driver installation
 
@@ -293,7 +359,7 @@ sudo sync
 sudo kmutil load -p /Library/Extensions/usbgadget.kext
 ```
 
-Approve any macOS prompt and restart. The USB driver needs to be loaded for mac2jb to work. This prebuilt-driver setup follows **SocraticBliss's** recommendation; compiling is only the fallback below.
+Approve any macOS prompt and restart. The USB driver needs to be loaded for mac2jb to work. Compiling is only the fallback below.
 
 If this build is incompatible with your Mac, use the source-build fallback below.
 
@@ -346,6 +412,9 @@ Apple-derived headers retain their Apple Public Source License notices; the full
 APSL 2.0 text is included in both `vendor/libusbd/LICENSE-APSL-2.0.txt` and
 `vendor/macos_usb_gadget_poc/LICENSE-APSL-2.0.txt`. Dated changes to libusbd's
 macOS backend and build are recorded inside their respective modified files.
+A downstream patch dated **2026-10-26** fixes IOKit service-handle ownership in
+`alt_IOUSBDeviceControllerLib.c`; `upstream.lock` still records the upstream
+origin, not a claim that the local libusbd tree is unmodified.
 
 `vendor/ns2jb` replaces the previous snapshot with [kurumuz/ns2jb](https://gitlab.com/kurumuz/ns2jb)
 at commit `eb2bdec8f3907c5830eb01fb9d55797af7403579`. Its source, runtime,
@@ -369,7 +438,7 @@ vendored project is an untouched full checkout.
 
 HBLauncher is pinned to [v0.2.0](https://github.com/ravensclawx/HBLauncher/releases/tag/v0.2.0),
 commit `b40723be04baa51e5d1f121a1e2242c4167b6cbc`. Its launcher, apps, assets,
-and retained notices are bundled with v0.4.1; mac2jb's bridge adapter
+and retained notices are bundled with v0.4.2; mac2jb's bridge adapter
 connects it to the active held session without the Pico keyboard workflow.
 
 The fork accepts a valid initial console greeting without the previous pairing-token authentication. Use the host on a trusted local network. Its startup cleanup removes every `NS2_GAP`-prefixed root entry on the inspected SmileBASIC `save` and `tmp` mounts; keep personal files under other names.
@@ -390,6 +459,5 @@ The complete source distribution includes the tested unsigned driver in `drivers
 - **[kurumuz](https://gitlab.com/kurumuz)** — the [ns2jb compatibility fork](https://gitlab.com/kurumuz/ns2jb) bundled in this checkout.
 - **[pepsipu](https://gitlab.com/pepsipu)** — [ns2jb](https://gitlab.com/pepsipu/ns2jb), the original Switch 2 exploit and FS research.
 - **[ShinyQuagsire](https://github.com/shinyquagsire23)** — [libusbd](https://github.com/shinyquagsire23/libusbd) and [macos_usb_gadget_poc](https://github.com/shinyquagsire23/macos_usb_gadget_poc), USB device emulation and experimental macOS gadget-driver work.
-- **[SocraticBliss](https://github.com/SocraticBliss)** — feedback and guidance that helped simplify USB driver installation, clarify the SIP requirement, and provide a prebuilt-driver setup path.
 
 See the project's included licenses and upstream documentation for copyright, attribution, and reuse terms.

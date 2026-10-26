@@ -1,4 +1,17 @@
 /*
+ * mac2jb downstream modification notice (IOKit controller ownership)
+ *
+ * Modified by: cpypwn (mac2jb integration)
+ * 2026-10-26: Retain an independent IOKit service reference for each controller
+ *             wrapper; discard the wrapper if retaining fails. Validate output
+ *             pointers and clear the service on release, including null handling.
+ *             Wrapper storage remains caller-owned and is deallocated separately.
+ *
+ * Based on: https://github.com/shinyquagsire23/libusbd
+ * Original upstream copyright and license terms are preserved below and in LICENSE.
+ */
+
+/*
  *  alt_IOUSBDeviceLib.c
  *  alt_IOUSBDeviceFamily
  *
@@ -46,9 +59,12 @@ static alt_IOUSBDeviceControllerRef __deviceRefFromService(CFAllocatorRef alloca
 	
     offset = device;
     bzero(offset, size);
-    
+
+	if (IOObjectRetain(service) != KERN_SUCCESS) {
+		CFAllocatorDeallocate(allocator, device);
+		return NULL;
+	}
 	device->deviceIOService = service;
-	//IOObjectRetain(service);
     return device;
 }
 
@@ -60,6 +76,9 @@ IOReturn alt_IOUSBDeviceControllerCreate(
     CFMutableDictionaryRef 	matchingDict;
 	io_service_t		deviceIOService;
 	alt_IOUSBDeviceControllerRef		deviceRef;
+	if (!deviceRefPtr)
+		return kIOReturnBadArgument;
+	*deviceRefPtr = NULL;
 	matchingDict = IOServiceMatching("alt_IOUSBDeviceController");
 	if (!matchingDict)
 		return kIOReturnNoMemory;
@@ -81,12 +100,11 @@ IOReturn alt_IOUSBDeviceControllerCreateFromService(
 									alt_IOUSBDeviceControllerRef* deviceRefPtr
 								   )
 {    
-    CFMutableDictionaryRef 	matchingDict;
 	alt_IOUSBDeviceControllerRef		deviceRef;
-	matchingDict = IOServiceMatching("alt_IOUSBDeviceController");
-	if (!matchingDict)
-		return kIOReturnNoMemory;
-	
+	if (!deviceRefPtr)
+		return kIOReturnBadArgument;
+	*deviceRefPtr = NULL;
+
 	if(!deviceIOService)
 		return kIOReturnNotFound;
 	deviceRef = __deviceRefFromService(allocator, deviceIOService);
@@ -115,9 +133,11 @@ IOReturn alt_IOUSBDeviceControllerForceOffBus(alt_IOUSBDeviceControllerRef devic
 
 void alt_IOUSBDeviceControllerRelease( alt_IOUSBDeviceControllerRef device )
 {
-    if ( device->deviceIOService )
-        IOObjectRelease(device->deviceIOService);
-	device->deviceIOService = 0;
+    if (device && device->deviceIOService != IO_OBJECT_NULL) {
+        io_service_t service = device->deviceIOService;
+        device->deviceIOService = IO_OBJECT_NULL;
+        IOObjectRelease(service);
+    }
 }
 
 IOReturn alt_IOUSBDeviceControllerSendCommand(alt_IOUSBDeviceControllerRef device, CFStringRef command, CFTypeRef param)

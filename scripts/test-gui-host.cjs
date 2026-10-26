@@ -59,11 +59,57 @@ test('success requires independent FS verification, restoration and cleanup', ()
 });
 test('timing defaults and independent range limits are validated', () => {
   assert.deepEqual(hidSettings([]), {delay: 50, enumerationTimeout: 4,
-    loadWaitMs: 3000, runWaitMs: 3000, removeWaitMs: 3000, loadConfirmWaitMs: 1000});
+    loadWaitMs: 3000, runWaitMs: 3000, removeWaitMs: 3000, loadConfirmWaitMs: 1000, demo: false});
   assert.equal(hidSettings(['2000', '--enumeration-timeout', '120', '--load-wait-ms', '0']).loadWaitMs, 0);
   for (const args of [['0'], ['2001'], ['50', '--enumeration-timeout', '0'],
     ['50', '--enumeration-timeout', '121'], ['50', '--run-wait-ms', '120001'],
     ['50', '--load-confirm-wait-ms', '-1']]) assert.throws(() => hidSettings(args));
+});
+test('demo is a standalone opt-in flag and preserves all timing validation', () => {
+  assert.equal(hidSettings(['--demo']).demo, true);
+  const settings = hidSettings(['77', '--demo', '--load-wait-ms', '22', '--enumeration-timeout', '1']);
+  assert.equal(settings.demo, true);
+  assert.equal(settings.delay, 77);
+  assert.equal(settings.loadWaitMs, 22);
+  assert.equal(settings.enumerationTimeout, 1);
+  for (const args of [['--demo', '--demo'], ['--demo=true'], ['--demo=false'],
+    ['--demo', 'true'], ['--demo', 'false'], ['--demo', '1'],
+    ['50', '--demo', '--enumeration-timeout', '0'], ['50', '--demo', '--run-wait-ms', '120001']])
+    assert.throws(() => hidSettings(args), undefined, JSON.stringify(args));
+});
+test('demo reaches the actual command sender after safe controller probe retry', async t => {
+  const root = fixture(t, `
+    const fs = require('fs'), path = require('path');
+    fs.appendFileSync('demo-invocations.jsonl', JSON.stringify({
+      executable:path.basename(process.argv[1]), controller:process.env.MAC2JB_CONTROLLER, args:process.argv.slice(2)
+    }) + '\\n');
+    if (process.env.MAC2JB_CONTROLLER === 'usb-drd0') {
+      console.error('USB host did not enumerate a keyboard'); process.exitCode = 1;
+    } else {console.log('Keyboard enumerated. Sending...'); console.log('Sending: LOAD');}
+  `);
+  const result = await run(root, ['hid', 'commands', 'auto', '77', '--demo', '--load-wait-ms', '22']).done;
+  assert.equal(result.code, 0, result.error);
+  const invocations = fs.readFileSync(path.join(root, 'demo-invocations.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(invocations.map(value => value.controller), ['usb-drd0', 'usb-drd1']);
+  assert.ok(invocations.every(value => value.executable === 'mac2jb-commands' &&
+    value.args.filter(argument => argument === '--demo').length === 1));
+  for (const value of invocations) {
+    assert.equal(value.args[value.args.indexOf('--delay-ms') + 1], '77');
+    assert.equal(value.args[value.args.indexOf('--load-wait-ms') + 1], '22');
+  }
+  assert.ok(result.events.some(value => value.type === 'typing' && value.kind === 'commands'));
+  assert.ok(result.events.some(value => value.type === 'transfer-complete'));
+});
+test('bootstrap sender never receives demo even when the adapter option is enabled', async t => {
+  const root = fixture(t, `
+    require('fs').writeFileSync('bootstrap-args.json', JSON.stringify({
+      executable:require('path').basename(process.argv[1]), args:process.argv.slice(2)
+    })); console.log('Keyboard enumerated. Sending...'); console.log('Sent line 1');
+  `);
+  const result = await run(root, ['hid', 'bootstrap', 'usb-drd1', '77', '--demo']).done;
+  assert.equal(result.code, 0, result.error);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'bootstrap-args.json'), 'utf8')),
+    {executable: 'mac2jb-send', args: ['assets/bootstrap.bas', '--delay-ms', '77']});
 });
 test('only pre-enumeration failures probe another controller', async t => {
   const root = fixture(t, `
@@ -82,6 +128,40 @@ test('a partial transfer never probes another controller', async t => {
   assert.equal(result.code, 1);
   assert.equal(result.events.filter(e => e.type === 'controller').length, 1);
   assert.ok(result.events.some(e => e.type === 'failed' && e.partial === true));
+});
+for (const kind of ['bootstrap', 'commands']) for (const typing of [false, true]) {
+  test(`${kind} helper signal termination reports the actual failure and never probes again (${typing ? 'partial typing' : 'before typing'})`, async t => {
+    const root = fixture(t, `
+      console.log(${JSON.stringify(typing ? 'Keyboard enumerated. Sending...' : 'Waiting for USB host enumeration...')});
+      process.kill(process.pid, 'SIGTERM');
+    `);
+    const result = await run(root, ['hid', kind, 'auto']).done;
+    assert.equal(result.code, 1, result.error);
+    assert.deepEqual(result.events.filter(event => event.type === 'controller').map(event => event.controller), ['usb-drd0']);
+    const failed = result.events.filter(event => event.type === 'failed');
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].helper, kind === 'bootstrap' ? 'mac2jb-send' : 'mac2jb-commands');
+    assert.equal(failed[0].signal, 'SIGTERM');
+    assert.equal(failed[0].controller, 'usb-drd0');
+    assert.equal(failed[0].partial, typing);
+    assert.match(failed[0].message, new RegExp(`${failed[0].helper} terminated by SIGTERM on usb-drd0`));
+    assert.match(failed[0].message, /does not establish that the USB driver is missing/);
+    assert.match(failed[0].message, /macOS crash reports and the session logs/);
+    assert.match(failed[0].message, /Automatic retry was stopped/);
+    assert.equal(result.events.some(event => event.type === 'transfer-complete'), false);
+  });
+}
+test('expected enumeration timeout signals still allow the next safe controller probe', {timeout: 5000}, async t => {
+  const root = fixture(t, `
+    if (process.env.MAC2JB_CONTROLLER === 'usb-drd0') {
+      console.log('Waiting for USB host enumeration...'); setInterval(() => {}, 1000);
+    } else {console.log('Keyboard enumerated. Sending...'); console.log('Sent line 1');}
+  `);
+  const result = await run(root, ['hid', 'bootstrap', 'auto', '50', '--enumeration-timeout', '1']).done;
+  assert.equal(result.code, 0, result.error);
+  assert.deepEqual(result.events.filter(event => event.type === 'controller').map(event => event.controller), ['usb-drd0', 'usb-drd1']);
+  assert.equal(result.events.some(event => event.type === 'failed'), false);
+  assert.ok(result.events.some(event => event.type === 'transfer-complete'));
 });
 test('fragmented native line events show the current line before its completion', {timeout: 8000}, async t => {
   const root = fixture(t, `
@@ -250,6 +330,7 @@ test('post-command typing, waits and progress replace enumeration and preserve t
   assert.equal(result.code, 0, result.error);
   const forwarded = JSON.parse(fs.readFileSync(path.join(root, 'timing-args.json')));
   assert.equal(forwarded.timeout, '1');
+  assert.equal(forwarded.args.includes('--demo'), false);
   for (const [flag, value] of [['--delay-ms','77'], ['--enumeration-timeout','1'], ['--load-confirm-wait-ms','11'],
     ['--load-wait-ms','22'], ['--run-wait-ms','33'], ['--remove-wait-ms','44']])
     assert.equal(forwarded.args[forwarded.args.indexOf(flag)+1], value);
