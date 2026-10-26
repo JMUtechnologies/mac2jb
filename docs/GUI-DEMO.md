@@ -1,6 +1,6 @@
 # mac2jb GUI
 
-mac2jb v0.4.0 provides the ns2jb workflow, HBLauncher and an experimental
+mac2jb v0.4.1 provides the ns2jb workflow, HBLauncher and an experimental
 Stremio-compatible player. A completed Mac-side transfer does not prove that
 the console accepted the input or that ns2jb succeeded; the host independently
 verifies execution, restoration and cleanup.
@@ -13,7 +13,7 @@ completed count after that line finishes.
 
 ## Run the app
 
-On an **Apple Silicon Mac running macOS 14 or newer**, download [the v0.4.0 app ZIP](https://github.com/cpypwn/mac2jb/releases/download/v0.4.0/mac2jb-v0.4.0-macos-arm64.zip), extract it and open **mac2jb.app**. Its executable bundles the sender tools, Node.js runtime, host source, bootstrap, unsigned USB driver, and notices. The app also includes HBLauncher v0.2.0, ftpd-sb v0.1.0, and the required companion tools and fonts. You do not need a Pico, a separate Python or Node.js installation, Xcode, or command-line tools to run the prepared app. It extracts its embedded payload into a private session folder.
+On an **Apple Silicon Mac running macOS 14 or newer**, download [the v0.4.1 app ZIP](https://github.com/cpypwn/mac2jb/releases/download/v0.4.1/mac2jb-v0.4.1-macos-arm64.zip), extract it and open **mac2jb.app**. Its executable bundles the sender tools, Node.js runtime, host source, bootstrap, unsigned USB driver, and notices. The app also includes HBLauncher v0.2.0, ftpd-sb v0.1.0, and the required companion tools and fonts. You do not need a Pico, a separate Python or Node.js installation, Xcode, or command-line tools to run the prepared app. It extracts its embedded payload into a private session folder.
 
 The app is ad hoc signed, not Developer ID signed or notarized. If a downloaded copy is blocked by Gatekeeper, try opening it, then use **System Settings → Privacy & Security → Open Anyway**, if macOS offers it. See [Apple’s guidance for opening an app from an unidentified developer](https://support.apple.com/en-us/102445). Do not change kernel-security settings to address a Gatekeeper app warning.
 
@@ -89,7 +89,7 @@ media, account features and controls.
 ## Before a first run
 
 1. Have an Apple Silicon Mac, a data-capable USB-C cable, and the compatible console software. The project’s tested combination is **Switch 2 system software 23.0.1 and SmileBASIC 4.4.9**, with more than **20 MiB free** in the SmileBASIC save.
-2. **SIP must be disabled for the bundled unsigned driver.** In macOS Recovery, enable third-party kernel extensions and run `csrutil disable` in Terminal. Restart into macOS. You do not need to compile or sign the bundled driver. The GUI never changes Recovery settings.
+2. **macOS must permit the bundled unsigned driver.** Fully disabled SIP is the maintainer-tested setup; compatible partial/custom configurations are accepted. If your driver already loads, keep your configuration. Otherwise follow the [documented driver setup](../README.md#install-the-bundled-usb-driver-recommended), complete approval/restart prompts, and refresh the loaded-driver check. The GUI never changes SIP, AMFI, or Recovery settings.
 3. Click **Install & load driver…**, approve the administrator prompt, complete macOS approval if requested, and restart. The tested unsigned driver is bundled; Xcode is not required. The previous CLI also supports `bash mac2jb.command --install-driver`. See [driver setup and source-build fallback](../README.md#install-the-bundled-usb-driver-recommended).
 4. Put the Mac and Switch on the same reachable local network. **Ethernet is likely required for the Switch 2; Wi-Fi has not yet been verified with this setup.** Select that network’s Mac IPv4 address, and allow the host through macOS networking/firewall prompts if requested. The host uses TCP port **39380**. Use a data-capable cable and check the USB power direction: on the tested hardware, enumeration failed when the Mac was charging the Switch. If the Switch shows that it is charging from the Mac, disconnect and reconnect the cable before retrying. A charging indicator does not prove that the keyboard data connection is working.
 5. Preserve compatible console software before testing. Follow the [README’s 90DNS guidance](../README.md#highly-recommended-protect-the-required-software-versions), including its regional IPv4 addresses and IPv6 instructions, on the network connection used for testing.
@@ -101,7 +101,7 @@ Once a compatible driver is installed, approved, and loaded, the prepared applic
 
 Use **mac2jb → Check for Updates…**, or leave **Check for Updates Automatically** enabled. Automatic checks run at launch if at least six hours have passed since the last successful check, then daily while the app stays open. Choose **Download update** and, after the current session/driver work finishes, **Restart & update**. The app verifies the download and app bundle, keeps a backup of the old app, and reopens the new version. A failed replacement restores the old app; errors show the private updater log path.
 
-Updating affects the app only. Drivers, Recovery settings, and existing session logs are left in place. Your app folder must be writable; macOS security checks remain in effect. The updater trusts the public mac2jb GitHub repository over HTTPS and validates GitHub digests and the release checksum file; the app remains ad-hoc signed. If your older app has no updater, download v0.4.0 manually. The CLI is updated separately.
+Updating affects the app only. Drivers, Recovery settings, and existing session logs are left in place. Your app folder must be writable; macOS security checks remain in effect. The updater trusts the public mac2jb GitHub repository over HTTPS and validates GitHub digests and the release checksum file; the app remains ad-hoc signed. If your older app has no updater, download v0.4.1 manually. The CLI is updated separately.
 
 ## Session data and distribution
 

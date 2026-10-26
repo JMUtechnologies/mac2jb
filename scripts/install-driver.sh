@@ -14,12 +14,13 @@ verify() {
 verify
 [[ "${1:-}" == --verify ]] && exit 0
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'Apple Silicon macOS is required.' >&2; exit 1; }
-[[ "$(csrutil status)" == 'System Integrity Protection status: disabled.' ]] || {
-  echo 'Disable SIP in macOS Recovery before installing this unsigned driver. See the README.' >&2; exit 1;
-}
 if [[ "$EUID" != 0 ]]; then
   exec sudo /bin/bash "$0"
 fi
+# Custom SIP configurations cannot be judged from the status summary. Record it
+# for diagnostics; filesystem permissions and kmutil enforce the actual policy.
+echo 'Current SIP configuration (diagnostic only):'
+csrutil status 2>&1 || true
 # Stage under a root-owned directory and verify again before installing.
 STAGE="$(mktemp -d /Library/Extensions/.mac2jb-driver.XXXXXX)"
 trap 'rmdir "$STAGE" 2>/dev/null || true' EXIT
@@ -41,4 +42,10 @@ touch /Library/Extensions/.mac2jb-usbgadget-restart-required
 chmod 644 /Library/Extensions/.mac2jb-usbgadget-restart-required
 sync
 echo 'Driver installed. Restart after macOS approval, then verify loading and USB input.'
-kmutil load -p "$TARGET"
+if kmutil load -p "$TARGET"; then
+  echo 'Driver load request accepted. Complete any approval/restart prompts and refresh the loaded-driver check.'
+else
+  LOAD_STATUS=$?
+  echo 'macOS did not accept the driver load request. Review the kmutil error above, kernel-extension policy, and approval/restart requirements. SIP status text alone does not determine compatibility.' >&2
+  exit "$LOAD_STATUS"
+fi

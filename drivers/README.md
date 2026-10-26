@@ -11,7 +11,7 @@ The bundled source snapshot is at `../vendor/macos_usb_gadget_poc/usbgadget/`, p
 
 Copyright © 2022 Max Thomas. Upstream MIT license: `../vendor/macos_usb_gadget_poc/usbgadget/LICENSE`. Apple-derived source notices and APSL text are retained in `../vendor/macos_usb_gadget_poc/`. These licenses are also included alongside this file for standalone driver packaging.
 
-SIP must be disabled for this unsigned-driver workflow. Enable third-party kernel extensions in Recovery and complete any macOS approval/reboot prompts. Neither the GUI nor the installer changes startup security or SIP.
+macOS must permit loading this unsigned driver. Fully disabled SIP is the maintainer-tested setup, not an installer requirement; compatible partial/custom SIP configurations are accepted. The installer records `csrutil status` only for diagnostics and preserves the actual `kmutil` load error and exit code. The GUI checks whether the driver is loaded and whether a restart is pending. Complete any kernel-extension approval/restart prompts. Neither the GUI nor the installer changes startup security, SIP, or AMFI.
 
 Thanks to **SocraticBliss** for the feedback and guidance behind the simplified prebuilt-driver installation path and clearer SIP instructions. The driver itself is upstream work by **Max Thomas / ShinyQuagsire**, with the local build and unsigned-copy testing performed by the mac2jb maintainer.
 

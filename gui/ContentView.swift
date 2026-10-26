@@ -576,7 +576,7 @@ struct ContentView: View {
         if !model.shouldShowFirstTimeFooter { return AnyView(EmptyView()) }
         return AnyView(HStack(alignment: .top, spacing: 10) {
             Image(systemName: "info.circle").padding(.top, 1)
-            Text("First time? Disable SIP and enable kernel extensions in Recovery, then use Install & load driver. Approve and restart when prompted. No Xcode needed. The CLI remains available.")
+            Text("First time? Configure macOS to allow the unsigned driver, then use Install & load driver. Compatible custom SIP configurations are accepted. Approve and restart when prompted. No Xcode needed. The CLI remains available.")
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             Button("Setup guide ↗") {
@@ -668,7 +668,7 @@ struct ContentView: View {
                 model.recordDiagnostic("Driver installer:\n" + output)
                 driverMessage = task.terminationStatus == 0
                     ? "The bundled unsigned driver is installed. Approve it in System Settings → Privacy & Security if requested, then restart before starting mac2jb. Any previous driver was backed up; its path is in session activity.\n\n\(output.prefix(1400))"
-                    : "Driver setup needs attention. SIP must be disabled and kernel extensions enabled in Recovery. Complete any approval/restart prompts.\n\n\(output.prefix(1400))\n\nLog: \(model.diagnosticLogURL?.path ?? "Log unavailable")"
+                    : "Driver setup needs attention. Review the installer error below and macOS kernel-extension policy. Compatible custom SIP configurations are accepted; complete any approval/restart prompts.\n\n\(output.prefix(1400))\n\nLog: \(model.diagnosticLogURL?.path ?? "Log unavailable")"
             }
         }
         do { try task.run() }

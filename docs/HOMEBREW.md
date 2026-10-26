@@ -1,6 +1,6 @@
 # Homebrew in mac2jb
 
-mac2jb v0.4.0 offers **HBLauncher v0.2.0** for GPU apps and **Stremio · experimental**
+mac2jb v0.4.1 offers **HBLauncher v0.2.0** for GPU apps and **Stremio · experimental**
 for Mac-assisted media playback. Choose one application per fresh Held RPC
 session. The Mac and SmileBASIC must stay open throughout use.
 

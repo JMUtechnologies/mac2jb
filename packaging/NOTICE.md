@@ -1,10 +1,16 @@
-# mac2jb 0.4.0 packaging
+# mac2jb 0.4.1 packaging
 
 This release replaces the bundled ns2jb runtime with the complete
 `kurumuz/ns2jb` snapshot at `eb2bdec8f3907c5830eb01fb9d55797af7403579`.
 It includes the changes from v0.3.2 and the subsequent stage-specific recovery
 guidance on the main branch. The stable app identity and updater are retained.
 See `docs/HOMEBREW.md` for setup and adding compatible apps.
+
+The driver installer records SIP status for diagnostics instead of requiring
+an exact fully-disabled summary. macOS enforces filesystem and kernel-extension
+load policy; failed load requests retain the actual error and exit status.
+Compatible custom configurations are not rejected by the installer. Neither
+the installer nor GUI changes SIP, AMFI, or startup security.
 
 The start screen separates bootstrap typing from three saved-NS2 session modes:
 exploit only, held RPC, and system-code capture. Each session mode runs a fresh

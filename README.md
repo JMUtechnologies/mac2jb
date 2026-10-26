@@ -26,14 +26,14 @@ Replace it with the newly bundled [kurumuz bootstrap](assets/bootstrap.bas), whi
 
 ## Get mac2jb
 
-Download [mac2jb v0.4.0 for Apple Silicon](https://github.com/cpypwn/mac2jb/releases/download/v0.4.0/mac2jb-v0.4.0-macos-arm64.zip),
+Download [mac2jb v0.4.1 for Apple Silicon](https://github.com/cpypwn/mac2jb/releases/download/v0.4.1/mac2jb-v0.4.1-macos-arm64.zip),
 extract the ZIP, and open **mac2jb.app**. It requires **macOS 14 or newer** and
 bundles Node.js, the senders, the host, HBLauncher v0.2.0, ftpd-sb v0.1.0, and
 companion tools. The tested unsigned USB driver is included with the app and
 complete source distribution; complete the driver setup below before starting.
 See the [GUI guide](docs/GUI-DEMO.md).
 
-v0.4.0 uses the kurumuz ns2jb fork and adds a Mac-assisted experimental
+v0.4.1 uses the kurumuz ns2jb fork and adds a Mac-assisted experimental
 Stremio-compatible player. Stremio startup and playback have been confirmed on
 the supported console setup; account library and watch-progress sync still need
 live verification. Complete the [required bootstrap replacement](#required-replace-the-old-bootstrap),
@@ -67,14 +67,14 @@ The tested **unsigned** prebuilt driver is at `drivers/usbgadget.kext`. Its sour
 vendor/macos_usb_gadget_poc/usbgadget/usbgadget.xcodeproj
 ```
 
-**SIP must be disabled to use the bundled unsigned driver.** You do **not** need to compile or sign it. Enable third-party kernel extensions and complete any macOS approval/reboot prompts as well. The maintainer tested this unsigned driver with SIP disabled. Disabling SIP lowers system protection; mac2jb does not change it automatically. See [Apple's kernel security documentation](https://support.apple.com/guide/security/securely-extending-the-kernel-in-macos-sec8e454101b/web).
+**macOS must permit loading the bundled unsigned driver.** Fully disabled SIP is the maintainer-tested setup, not an installer requirement. Compatible partial/custom SIP configurations are accepted: the installer logs `csrutil status` for diagnostics and lets macOS enforce the actual load policy. You do **not** need to compile or sign the driver. Complete any kernel-extension approval/restart prompts. mac2jb does not change SIP or AMFI. See [Apple's kernel security documentation](https://support.apple.com/guide/security/securely-extending-the-kernel-in-macos-sec8e454101b/web).
 
 `make` builds the **mac2jb command-line utilities**, not the kernel extension. It does not install or approve a kext for you.
 
 
 ### Install the bundled USB driver (recommended)
 
-1. Shut down, hold the power button, and choose **Options → Continue**. In Recovery, enable third-party kernel extensions under **Startup Security Utility → Security Policy → Reduced Security → Allow user management of kernel extensions from identified developers**. Open **Utilities → Terminal**, run `csrutil disable`, and restart. Confirm with `csrutil status` in macOS. Disabling SIP can place startup policy in Permissive Security.
+1. If your existing configuration already loads the driver, keep it. Otherwise, the maintainer-tested setup is: shut down, hold the power button, and choose **Options → Continue**. In Recovery, enable third-party kernel extensions under **Startup Security Utility → Security Policy → Reduced Security → Allow user management of kernel extensions from identified developers**. Open **Utilities → Terminal**, run `csrutil disable`, and restart. Use `csrutil status` to inspect the configuration; its summary is not a compatibility test. Disabling SIP can place startup policy in Permissive Security.
 2. **GUI:** open mac2jb and click **Install & load driver…**. Approve the administrator prompt. **CLI:** run `bash mac2jb.command --install-driver`, or choose option 4 from its menu. No Xcode or recompilation is needed for this driver.
 3. Approve any request in **System Settings → Privacy & Security**, then restart. Refresh the GUI's checks; the driver must be reported as loaded before starting. From Terminal, verify with `kmutil showloaded --list-only | grep -i usbgadget`.
 
@@ -160,7 +160,7 @@ Bootstrap transfer time: The bundled bootstrap is 8,084 characters over 229 line
 
 Option 2 — Post-bootstrap only: With the fork's new five-argument bootstrap saved as `NS2` in **slot 0**, **restart the console → open SmileBASIC → enter Direct mode**. The launcher skips the bootstrap transfer, starts a new ns2jb host session, and automatically sends `LOAD "TXT:NS2"` followed by the remaining post-bootstrap commands.
 
-Option 4 — Install & load bundled USB driver: Installs the included unsigned `usbgadget.kext`, preserves any existing driver in a backup, and requests loading. Disable SIP and enable kernel extensions in Recovery first; complete any macOS approval prompts and restart before choosing option 1 or 2. You can also run `bash mac2jb.command --install-driver` directly.
+Option 4 — Install & load bundled USB driver: Installs the included unsigned `usbgadget.kext`, preserves any existing driver in a backup, and requests loading. Configure macOS to permit the unsigned driver; compatible custom SIP configurations are accepted. Complete any macOS approval prompts and restart before choosing option 1 or 2. You can also run `bash mac2jb.command --install-driver` directly.
 
 The launcher opens the ns2jb host in another Terminal window and waits for its current session’s `V=START(...)` pairing command before submitting the post-bootstrap commands. They are sent in this order:
 
@@ -279,7 +279,7 @@ Replace `MYPROG` with your chosen name. For the ns2jb bootstrap, confirm that th
 
 ## Manual USB driver installation
 
-For manual installation, after disabling SIP and enabling kernel extensions, navigate to the source checkout's `drivers` folder and run:
+For manual installation, after configuring macOS to allow the unsigned driver, navigate to the source checkout's `drivers` folder and run:
 
 ```sh
 # Preserve an installed copy so ditto cannot merge old signature files into it.
@@ -302,7 +302,7 @@ If this build is incompatible with your Mac, use the source-build fallback below
 This is the fallback for users who cannot use the bundled prebuilt driver. If you already have a compatible build, skip step 1.
 
 1. Install **full Xcode**, open `vendor/macos_usb_gadget_poc/usbgadget/usbgadget.xcodeproj`, select the `usbgadget` kext target, and build for the Mac. Locate the resulting `usbgadget.kext` in Xcode's build products. Ensure the build architecture and signing configuration are suitable for your Mac. Build completion does **not** mean the kext is properly signed or approved.
-2. Shut down the Mac, then hold the power button until startup options appear. Choose **Options → Continue** to enter macOS Recovery. Enable third-party kernel extensions in **Startup Security Utility → Security Policy**, using **Reduced Security → Allow user management of kernel extensions from identified developers**. In Recovery, open **Utilities → Terminal**, run `csrutil disable`, and follow its prompts. Restart into macOS and run `csrutil status` to confirm SIP is disabled. Disabling SIP can place the startup policy in Permissive Security; Reduced Security alone is not sufficient for unsigned kext loading.
+2. If the driver already loads under your custom configuration, keep it. Otherwise, the maintainer-tested setup is: shut down the Mac, then hold the power button until startup options appear. Choose **Options → Continue** to enter macOS Recovery. Enable third-party kernel extensions in **Startup Security Utility → Security Policy**, using **Reduced Security → Allow user management of kernel extensions from identified developers**. In Recovery, open **Utilities → Terminal**, run `csrutil disable`, and follow its prompts. Restart into macOS and use `csrutil status` for diagnostics; a custom summary is not rejected by the installer. Disabling SIP can place the startup policy in Permissive Security; Reduced Security alone is not sufficient for unsigned kext loading.
 3. Copy the **built** bundle to the standard third-party location and give the installed copy the ownership and permissions macOS expects. Replace the placeholder path below with the actual build product:
 
    ```sh
@@ -326,7 +326,7 @@ This is the fallback for users who cannot use the bundled prebuilt driver. If yo
    sudo kmutil load -p /Library/Extensions/usbgadget.kext
    ```
 
-   Follow any macOS approval prompts under **System Settings → Privacy & Security**, then restart. A signing identity is not required for the unsigned-driver setup with SIP disabled; kernel-extension policy, approval, ownership, and compatibility still apply.
+   Follow any macOS approval prompts under **System Settings → Privacy & Security**, then restart. A signing identity is not required when macOS permits this unsigned driver; kernel-extension policy, approval, ownership, and compatibility still apply.
 5. After the required reboot, check:
 
    ```sh
@@ -369,7 +369,7 @@ vendored project is an untouched full checkout.
 
 HBLauncher is pinned to [v0.2.0](https://github.com/ravensclawx/HBLauncher/releases/tag/v0.2.0),
 commit `b40723be04baa51e5d1f121a1e2242c4167b6cbc`. Its launcher, apps, assets,
-and retained notices are bundled with v0.4.0; mac2jb's bridge adapter
+and retained notices are bundled with v0.4.1; mac2jb's bridge adapter
 connects it to the active held session without the Pico keyboard workflow.
 
 The fork accepts a valid initial console greeting without the previous pairing-token authentication. Use the host on a trusted local network. Its startup cleanup removes every `NS2_GAP`-prefixed root entry on the inspected SmileBASIC `save` and `tmp` mounts; keep personal files under other names.

@@ -1,6 +1,6 @@
 # Experimental Stremio-compatible player
 
-mac2jb v0.4.0 includes an experimental Mac-assisted player for its verified
+mac2jb v0.4.1 includes an experimental Mac-assisted player for its verified
 Held RPC session. The Mac requests real Stremio addon catalogs, metadata, episodes
 and streams, then decodes supported media. The Switch displays the menu and
 video through a GPU app and plays PCM audio through a new native audio adapter.
