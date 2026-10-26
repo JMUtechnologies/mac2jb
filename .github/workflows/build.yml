@@ -43,6 +43,32 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Prepare pinned runtime and real media test tools
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            brew install cmake
+          fi
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            brew install ffmpeg
+          fi
+          CMAKE_BINARY="$(command -v cmake)"
+          FFMPEG_BINARY="$(command -v ffmpeg)"
+          FFPROBE_BINARY="$(command -v ffprobe)"
+          test -x "$CMAKE_BINARY"
+          test -x "$FFMPEG_BINARY"
+          test -x "$FFPROBE_BINARY"
+          "$CMAKE_BINARY" --version
+          "$FFMPEG_BINARY" -version
+          "$FFPROBE_BINARY" -version
+          python3 scripts/prepare-homebrew-runtime.py
+          python3 scripts/prepare-homebrew-runtime.py --check
+          {
+            echo "MAC2JB_FFMPEG=$FFMPEG_BINARY"
+            echo "MAC2JB_FFPROBE=$FFPROBE_BINARY"
+            echo "STREMIO_TEST_PYTHON=$PWD/.build-gui/homebrew/python/bin/python3"
+            echo "STREMIO_TEST_FONT=$PWD/.build-gui/homebrew/fonts/DejaVuSans.ttf"
+          } >> "$GITHUB_ENV"
+
       - name: Verify ns2jb snapshot and tests
         run: |
           (cd vendor/ns2jb && shasum -a 256 -c SHA256SUMS)
