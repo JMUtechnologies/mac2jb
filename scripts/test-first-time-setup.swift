@@ -257,10 +257,11 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
     static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
         precondition(condition(), message); checks += 1
     }
-    static func until(_ message: String, _ predicate: @escaping @MainActor () -> Bool) async throws {
+    static func until(_ message: String, diagnostic: @MainActor () -> String = { "" }, _ predicate: @escaping @MainActor () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(5)
         while !predicate() && Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
-        check(predicate(), "Timed out: " + message)
+        let succeeded = predicate()
+        check(succeeded, "Timed out: " + message + (succeeded ? "" : diagnostic()))
     }
     static func bootstrap(_ f: SetupFixture) async throws {
         f.model.selectRunMode(.bootstrapOnly); f.model.start()
@@ -1019,7 +1020,10 @@ enum EmbeddedPayloadMetadata { static let sha256 = "unused-fixture" }
         check(commandFlow.model.phase == .hostStarting && commandFlow.model.status == "Starting ns2jb host…",
               "initial host startup has a host-specific status")
         try commandFlow.put("release-command-host-ready")
-        try await until("standard command helper waiting before USB readiness") {
+        try await until("standard command helper waiting before USB readiness", diagnostic: {
+            "\nphase=\(commandFlow.model.phase) status=\(commandFlow.model.status) detail=\(commandFlow.model.detail)" +
+            "\nworkers=\(commandFlow.model.hasLiveWorkers) invocations=\(commandFlow.invocations) log=\(commandFlow.model.log)"
+        }) {
             commandFlow.model.phase == .commands && FileManager.default.fileExists(atPath: commandFlow.root.appendingPathComponent("waiting-commands").path)
         }
         let commandArguments = try String(contentsOf: commandFlow.root.appendingPathComponent("arguments"), encoding: .utf8)

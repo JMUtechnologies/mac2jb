@@ -856,13 +856,12 @@ private struct GUIEvent: Decodable {
             fail("Could not launch the bundled tool: \(error.localizedDescription)")
             return
         }
-        // Read until EOF before processing termination: buffered enumeration or
-        // failure messages must not be overtaken by the child-exit callback.
+        // drain pipe events before processing exit, without blocking the cooperative executor.
         Task.detached(priority: .userInitiated) { [weak self] in
-            let stderrTask = Task.detached { stderr.fileHandleForReading.readDataToEndOfFile() }
+            let stderrTask = Task.detached { await Self.readPipe(stderr.fileHandleForReading, toEnd: true) }
             var pending = Data()
             while true {
-                let chunk = output.fileHandleForReading.availableData
+                let chunk = await Self.readPipe(output.fileHandleForReading)
                 if chunk.isEmpty { break }
                 pending.append(chunk)
                 while let newline = pending.firstIndex(of: 10) {
@@ -877,9 +876,26 @@ private struct GUIEvent: Decodable {
             if !pending.isEmpty, let event = try? JSONDecoder().decode(GUIEvent.self, from: pending) {
                 await self?.receive(event, role: role, generation: currentGeneration)
             }
-            process.waitUntilExit()
+            await Self.waitForExit(process)
             let diagnostic = await stderrTask.value
             await self?.workerExited(role: role, process: process, diagnostic: diagnostic, generation: currentGeneration)
+        }
+    }
+
+    nonisolated private static func readPipe(_ handle: FileHandle, toEnd: Bool = false) async -> Data {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: toEnd ? handle.readDataToEndOfFile() : handle.availableData)
+            }
+        }
+    }
+
+    nonisolated private static func waitForExit(_ process: Process) async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                process.waitUntilExit()
+                continuation.resume()
+            }
         }
     }
 
