@@ -20,6 +20,13 @@ if CommandLine.arguments.contains("--self-test") {
             ("mac2jb-send", ["assets/bootstrap.bas", "--dry-run"]),
             ("mac2jb-commands", ["--dry-run"]),
             ("mac2jb-commands", ["--dry-run", "--demo"]),
+            ("mac2jb-commands", ["--dry-run", "--commands", "load,run,remove"]),
+            ("mac2jb-commands", ["--dry-run", "--commands", "start", "--start-prefix"]),
+            ("mac2jb-commands", ["--dry-run", "--start-arity", "9", "--commands", "start", "--start-command",
+                                 "V=START(39380,192,0,2,1,0,1,281474976710655,42)"]),
+            ("mac2jb-commands", ["--dry-run", "--save-bootstrap"]),
+            ("mac2jb-commands", ["--dry-run", "--save-bootstrap", "--demo"]),
+            ("mac2jb-keyboard", ["--self-test"]),
             ("mac2jb-commands", ["--dry-run", "--gui-events", "--load-confirm-wait-ms", "1000",
                                  "--load-wait-ms", "3000", "--run-wait-ms", "3000", "--remove-wait-ms", "3000"]),
             ("mac2jb-commands", ["--gui-timing-test", "--gui-events", "--load-confirm-wait-ms", "10",
@@ -27,9 +34,20 @@ if CommandLine.arguments.contains("--self-test") {
             ("mac2jb-commands", ["--gui-timing-test", "--gui-events", "--demo", "--load-confirm-wait-ms", "10",
                                  "--load-wait-ms", "10", "--run-wait-ms", "10", "--remove-wait-ms", "10"]),
             ("node", ["--check", "scripts/gui-session.cjs"]),
+            ("node", ["--check", "scripts/gui-attach.cjs"]),
+            ("node", ["--check", "scripts/rpc-attachment.cjs"]),
+            ("node", ["--check", "scripts/host-profiles.cjs"]),
+            ("node", ["--check", "scripts/prepare-host-profiles.cjs"]),
+            ("node", ["scripts/prepare-host-profiles.cjs", "--check"]),
+            ("node", ["--check", "scripts/gui-keyboard.cjs"]),
+            ("node", ["scripts/gui-keyboard.cjs", "--self-test"]),
             ("node", ["--check", "scripts/gui-dump.cjs"]),
             ("node", ["--check", "scripts/gui-homebrew.cjs"]),
+            ("node", ["--check", "scripts/gui-hblauncher.cjs"]),
+            ("node", ["--check", "scripts/gui-gpubrewlauncher.cjs"]),
             ("node", ["scripts/check-homebrew-runtime.cjs"]),
+            ("node", ["--check", "scripts/gui-izlauncher.cjs"]),
+            ("node", ["scripts/check-izlauncher-runtime.cjs"]),
             ("node", ["--check", "scripts/gui-stremio.cjs"]),
             ("node", ["scripts/check-stremio-runtime.cjs"]),
             ("node", ["scripts/gui-ouncecake.cjs", "--self-test"]),
@@ -47,6 +65,27 @@ if CommandLine.arguments.contains("--self-test") {
                               userInfo: [NSLocalizedDescriptionKey: "Check failed: \(tool)"])
             }
         }
+        for host in HostProfile.allCases where host != .bermTheSequel {
+            let selected = try BundledRuntime.prepare(sessionParent: testParent, host: host)
+            guard selected.host == host else {
+                throw BundledRuntime.RuntimeError.invalid("The prepared host does not match \(host.label).")
+            }
+            for (tool, arguments) in [
+                ("node", ["scripts/prepare-host-profiles.cjs", "--check"]),
+                ("node", ["--check", "vendor/ns2jb/run.cjs"]),
+                ("mac2jb-send", ["assets/bootstrap.bas", "--dry-run"])
+            ] {
+                let task = Process()
+                task.executableURL = selected.root.appendingPathComponent(tool)
+                task.arguments = arguments; task.currentDirectoryURL = selected.root
+                try task.run(); task.waitUntilExit()
+                guard task.terminationStatus == 0 else {
+                    throw BundledRuntime.RuntimeError.invalid("Packaged \(host.label) check failed: \(tool).")
+                }
+            }
+            try FileManager.default.removeItem(at: selected.root)
+            print("\(host.label): fresh offline runtime selection passed.")
+        }
         print("\(AppBuildIdentity.diagnosticLabel): embedded runtime and dry-run checks passed; no USB input sent.")
         try? FileManager.default.removeItem(at: testParent)
         exit(0)
@@ -60,17 +99,20 @@ struct Mac2jbApp: App {
     @StateObject private var model = SessionModel()
     @StateObject private var updater = AppUpdater()
     var body: some Scene {
-        WindowGroup(AppBuildIdentity.isTestBuild ? "mac2jb Kurumuz Test" : "mac2jb") {
+        WindowGroup("mac2jb") {
             ContentView(model: model, updater: updater)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     model.cancel()
                 }
         }
-        .defaultSize(width: 1110, height: 800)
+        .defaultSize(width: 900, height: 700)
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .appInfo) {
+                Button("Setup Guide…") {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/cpypwn/mac2jb#prerequisites")!)
+                }
                 Button("Check for Updates…") { updater.check() }.disabled(updater.isWorking)
                 Toggle("Check for Updates Automatically", isOn: $updater.checksAutomatically)
                     .disabled(AppBuildIdentity.isTestBuild)

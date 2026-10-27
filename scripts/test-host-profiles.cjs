@@ -1,0 +1,91 @@
+#!/usr/bin/env node
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const {spawnSync} = require('node:child_process');
+const {profiles,profileById,selectedProfile,sourceDigest,trustedProfileForDigest,validStartCommand} = require('./host-profiles.cjs');
+const {verifyProfile,selectHost} = require('./prepare-host-profiles.cjs');
+const root = path.resolve(__dirname,'..');
+
+test('three distinct pinned host sources preserve their original bootstraps and capabilities', async () => {
+  assert.deepEqual(profiles.map(row=>row.label),['pepsipu','kurumuz','BermTheSequel']);
+  assert.equal(new Set(profiles.map(row=>row.sourceSha256)).size,3);
+  assert.equal(selectedProfile(root).id,'BermTheSequel');
+  for (const profile of profiles) {
+    const folder=verifyProfile(root,profile);
+    assert.equal(sourceDigest(folder),await require(path.join(folder,'run.cjs')).sourceDigest());
+    assert.equal(fs.readFileSync(path.join(folder,'bootstrap.bas'),'utf8').includes(
+      profile.startArgumentCount===9 ? 'COMMON DEF START(PORT,A,B,C,D,T0#,T1#,T2#,T3#)' : 'COMMON DEF START(PORT,A,B,C,D)'),true);
+  }
+  assert.equal(profileById('pepsipu').supportsHeldRPC,false);
+  assert.equal(profileById('pepsipu').supportsDemo,false);
+  assert.equal(profileById('kurumuz').supportsDemo,false);
+  assert.equal(profileById('BermTheSequel').supportsDemo,true);
+  assert.throws(()=>trustedProfileForDigest(root,profileById('pepsipu').sourceSha256));
+});
+
+test('pairing commands are bound to selected arity, address and exact 48-bit token limits',()=>{
+  const five='V=START(39380,192,0,2,1)', nine='V=START(39380,192,0,2,1,0,1,281474976710655,42)';
+  for (const profile of profiles) {
+    assert.equal(validStartCommand(five,profile,'192.0.2.1'),profile.startArgumentCount===5);
+    assert.equal(validStartCommand(nine,profile,'192.0.2.1'),profile.startArgumentCount===9);
+  }
+  for (const bad of [nine.replace('281474976710655','281474976710656'),nine.replace(',42)',',042)'),
+    nine.replace(',42)',',-1)'),nine.replace(',42)',',4.2)'),nine+'\n',nine+';PRINT 1',nine.replace(',192,',',256,')])
+    assert.equal(validStartCommand(bad,profileById('pepsipu')),false,bad);
+  assert.equal(validStartCommand(nine,profileById('pepsipu'),'192.0.2.2'),false);
+});
+
+test('fresh runtime selection installs actual selected code and keeps trusted original sources',t=>{
+  for (const profile of profiles) {
+    const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'mac2jb-profile-test-'));
+    t.after(()=>fs.rmSync(runtime,{recursive:true,force:true}));
+    fs.mkdirSync(path.join(runtime,'source/vendor'),{recursive:true});
+    fs.cpSync(path.join(root,'vendor/ns2jb'),path.join(runtime,'source/vendor/ns2jb'),{recursive:true});
+    fs.mkdirSync(path.join(runtime,'vendor'),{recursive:true});
+    fs.cpSync(path.join(root,'vendor/ns2jb'),path.join(runtime,'vendor/ns2jb'),{recursive:true});
+    fs.cpSync(path.join(root,'vendor/ns2jb-hosts'),path.join(runtime,'vendor/ns2jb-hosts'),{recursive:true});
+    fs.cpSync(path.join(root,'assets/hosts'),path.join(runtime,'assets/hosts'),{recursive:true});
+    selectHost(runtime,profile.id);
+    assert.equal(selectedProfile(runtime).id,profile.id);
+    assert.equal(sourceDigest(path.join(runtime,'vendor/ns2jb')),profile.sourceSha256);
+    assert.equal(fs.readFileSync(path.join(runtime,'assets/bootstrap.bas')).equals(
+      fs.readFileSync(path.join(root,profile.bootstrap))),true);
+    for (const held of profiles.filter(row=>row.supportsHeldRPC))
+      assert.equal(trustedProfileForDigest(runtime,held.sourceSha256).profile.id,held.id);
+    assert.throws(()=>selectHost(runtime,'BermTheSequel'),/fresh runtime/);
+  }
+});
+
+test('packaged selection accepts the same runtime through a filesystem alias but rejects another root',t=>{
+  const parent=fs.mkdtempSync(path.join(os.tmpdir(),'mac2jb-profile-alias-'));
+  t.after(()=>fs.rmSync(parent,{recursive:true,force:true}));
+  const runtime=path.join(parent,'runtime'),alias=path.join(parent,'alias');
+  fs.mkdirSync(path.join(runtime,'source'),{recursive:true});
+  fs.writeFileSync(path.join(runtime,'source/LICENSE'),'runtime source marker');
+  fs.writeFileSync(path.join(runtime,'node'),'runtime node marker');
+  fs.mkdirSync(path.join(runtime,'scripts'));
+  for(const name of ['host-profiles.cjs','prepare-host-profiles.cjs'])
+    fs.copyFileSync(path.join(__dirname,name),path.join(runtime,'scripts',name));
+  fs.mkdirSync(path.join(runtime,'packaging'));
+  fs.copyFileSync(path.join(root,'packaging/host-profiles.json'),path.join(runtime,'packaging/host-profiles.json'));
+  fs.cpSync(path.join(root,'vendor/ns2jb'),path.join(runtime,'vendor/ns2jb'),{recursive:true});
+  fs.cpSync(path.join(root,'assets/hosts'),path.join(runtime,'assets/hosts'),{recursive:true});
+  fs.symlinkSync(runtime,alias,'dir');
+  const script=path.join(alias,'scripts/prepare-host-profiles.cjs');
+  const different=path.join(parent,'different');
+  fs.mkdirSync(path.join(different,'source'),{recursive:true});
+  fs.writeFileSync(path.join(different,'source/LICENSE'),'other source marker');
+  fs.writeFileSync(path.join(different,'node'),'other node marker');
+  const wrong=spawnSync(process.execPath,[script,'--select','BermTheSequel',different],{encoding:'utf8'});
+  assert.equal(wrong.status,1);assert.match(wrong.stderr,/fresh bundled runtime/);
+  assert.equal(fs.existsSync(path.join(different,'selected-host.json')),false);
+  const selected=spawnSync(process.execPath,[script,'--select','BermTheSequel',alias],{encoding:'utf8'});
+  assert.equal(selected.status,0,selected.stderr);
+  assert.equal(selectedProfile(runtime).id,'BermTheSequel');
+  const repeated=spawnSync(process.execPath,[script,'--select','BermTheSequel',alias],{encoding:'utf8'});
+  assert.equal(repeated.status,1);assert.match(repeated.stderr,/fresh runtime/);
+});

@@ -1,0 +1,79 @@
+{
+  "project": "GPUBrewLauncher",
+  "repository": "https://github.com/NiftyNova/GPUBrewLauncher",
+  "commit": "f35ff64ea4b9b42cf2a75095d24662fe250f03e4",
+  "sourceUrl": "https://github.com/NiftyNova/GPUBrewLauncher/tree/f35ff64ea4b9b42cf2a75095d24662fe250f03e4",
+  "distributionType": "Pinned source snapshot; no upstream tag or published release.",
+  "snapshotPath": "vendor/GPUBrewLauncher",
+  "fileCount": 180,
+  "totalBytes": 7957040,
+  "integrityManifest": "GPUBrewLauncher-SHA256SUMS",
+  "integrityManifestSha256": "186c1ffe9f132884d4cf27f4ae0a72bc078ac98a2c7cca669254deea301e310c",
+  "modifications": [],
+  "excludedPaths": [
+    {
+      "path": ".CREDITS.kate-swp",
+      "gitBlob": "ea7cfa489c3c8240a1d554a9ec31cd6782a93084",
+      "reason": "Committed editor swap file; not source or runtime data."
+    }
+  ],
+  "excludedPathRules": [
+    ".git/",
+    "runs/",
+    "tools/ (root local tool installations; sdk/tools source retained)",
+    "dist/",
+    "tmp/",
+    "temp/",
+    "node_modules/",
+    ".venv/",
+    "**/__pycache__/",
+    "**/*.pyc",
+    "**/*.log",
+    "**/*.kate-swp",
+    "**/*.swp",
+    "**/*.tmp",
+    "**/secret",
+    "**/secrets",
+    "**/settings.toml",
+    "**/connection.json",
+    "**/.env",
+    "**/.env.*",
+    "**/credentials*"
+  ],
+  "retainedNotices": [
+    {
+      "path": "CREDITS",
+      "sha256": "69e07b68303ffc8a8f418806982169b623edee98a77e6184749df7509679c676"
+    },
+    {
+      "path": "REFERENCE.md",
+      "sha256": "7159d9cf7b8376856745b5a8cb6b58dd20d12ddca27221bd0394c86d84269304"
+    },
+    {
+      "path": "docs/RELEASE.md",
+      "sha256": "9dd7c7a54d4bc5c386062edbf034998119ead8a249f257957afa0130edfe4519"
+    },
+    {
+      "path": "smilebasic/pico-keyboard/lib/adafruit_hid/LICENSE",
+      "sha256": "45ca96c509fa3fae19fd6a55ee5d0cba22746b41acb10ab2037d3ece6f4a932e"
+    }
+  ],
+  "licenseNotice": "Upstream assigns no blanket project license. CREDITS, REFERENCE.md, release guidance and included third-party notices are retained unchanged; the mac2jb MIT license does not relicense this material.",
+  "runtimeRequirements": [
+    "Node.js 22 or newer",
+    "Python 3 with Pillow",
+    "DejaVu Sans font",
+    "SPIRV-Tools spirv-val"
+  ],
+  "buildOnlyRequirements": [
+    "glslangValidator for shader builds",
+    "C compiler, Vulkan headers/loader/driver for desktop GPU tests"
+  ],
+  "npmDependencies": [],
+  "includedApps": [
+    "hello-world",
+    "froggy-road"
+  ],
+  "integrationStatus": "Separate launcher option in mac2jb; no mac2jb console test asserted.",
+  "bootstrapPolicy": "mac2jb uses its unchanged five-argument Kurumuz bootstrap and existing verified held session; this snapshot does not replace the bootstrap or ns2jb runtime."
+}

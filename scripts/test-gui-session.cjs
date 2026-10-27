@@ -7,6 +7,11 @@ const os = require('node:os');
 const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {heldResult, heldMessage} = require('./gui-session.cjs');
+function completeJSONRecords(output) {
+  const newline = output.lastIndexOf('\n');
+  if (newline < 0) return [];
+  return output.slice(0, newline).split('\n').filter(Boolean).map(JSON.parse);
+}
 function held() {
   return {verified:true, fs:{verified:true, restored:true, retainedEndpoint:{ready:true,session:'switch2-test'},
     cleanup:{deferred:true,donor:{cleanedUp:true}}}, rpc:{mode:'held',state:'listening'}};
@@ -15,8 +20,10 @@ function fixture(t, options = {}) {
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'mac2jb-session-test-')));
   const host=path.join(root,'vendor/ns2jb');
   fs.mkdirSync(host,{recursive:true});fs.mkdirSync(path.join(root,'scripts'));
-  for(const name of ['gui-host.cjs','gui-session.cjs'])
+  for(const name of ['gui-host.cjs','gui-session.cjs','host-profiles.cjs'])
     fs.copyFileSync(path.join(__dirname,name),path.join(root,'scripts',name));
+  fs.mkdirSync(path.join(root,'packaging'));
+  fs.copyFileSync(path.join(__dirname,'../packaging/host-profiles.json'),path.join(root,'packaging/host-profiles.json'));
   fs.writeFileSync(path.join(host,'worker.cjs'),[
     "const fs=require('fs');",
     "process.on('SIGTERM',()=>{fs.writeFileSync('group-signal.txt','wrong');process.exit(7);});",
@@ -45,7 +52,7 @@ function fixture(t, options = {}) {
     "worker.send('release');},options.cleanupMs||20);};",
     "if(!options.signalDelayMs)process.on('SIGTERM',onStop);",
     "process.on('SIGUSR1',()=>{result.error='Held RPC disconnected';result.rpc.state='closed';save();worker.once('exit',()=>process.exit(1));worker.send('release');});",
-    "worker.once('message',()=>{save();console.log('V=START(39380,127,0,0,1)');console.log('Run folder: '+directory);",
+    "worker.once('message',()=>{save();for(const line of options.pairingPrefix||[])console.log(line);console.log('V=START(39380,127,0,0,1)');console.log('Run folder: '+directory);",
     "if(options.delayReady)setTimeout(()=>console.log("+JSON.stringify(heldMessage)+"),options.delayReady);",
     "else console.log("+JSON.stringify(heldMessage)+");",
     "if(options.signalDelayMs)setTimeout(()=>process.on('SIGTERM',onStop),options.signalDelayMs);});",
@@ -79,10 +86,20 @@ function fixture(t, options = {}) {
     "running=true;emit('running');if(options.hblTerminal)setTimeout(()=>{terminal=true;emit(options.hblTerminal);close(options.hblTerminal==='failed'?1:0);},10);",
     "},options.hblLaunchMs||20);setInterval(()=>{},1000);"
   ].join('\n'));
+  fs.writeFileSync(path.join(root,'scripts/gui-gpubrewlauncher.cjs'),
+    "require('fs').writeFileSync('gpu-entry-used',process.argv[2]);\n"+
+    fs.readFileSync(path.join(root,'scripts/gui-homebrew.cjs'),'utf8'));
+  fs.writeFileSync(path.join(root,'scripts/gui-hblauncher.cjs'),
+    "require('fs').writeFileSync('hbl-entry-used',process.argv[2]);\n"+
+    fs.readFileSync(path.join(root,'scripts/gui-homebrew.cjs'),'utf8'));
+  fs.writeFileSync(path.join(root,'scripts/gui-izlauncher.cjs'),
+    "require('assert/strict').deepEqual(process.argv.slice(3),[]);require('fs').writeFileSync('iz-entry-used',process.argv[2]);\n"+
+    fs.readFileSync(path.join(root,'scripts/gui-homebrew.cjs'),'utf8'));
   const child=spawn(process.execPath,[path.join(root,'scripts/gui-host.cjs'),'host','127.0.0.1','--post-run-options'],{
     detached:true,stdio:['pipe','pipe','pipe'],env:{...process.env,NS2_BASIC_ARITY:'9',NS2_RPC_MODE:'1'}
   });
   let output='',error='';
+  child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');
   child.stdout.on('data',bytes=>{output+=bytes;});child.stderr.on('data',bytes=>{error+=bytes;});
   const done=new Promise((resolve,reject)=>{
     child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal,output,error}));
@@ -95,7 +112,7 @@ function fixture(t, options = {}) {
     await Promise.race([done,new Promise(resolve=>setTimeout(resolve,1000))]);
     fs.rmSync(root,{recursive:true,force:true});
   });
-  function events(){return output.trim().split('\n').filter(Boolean).map(JSON.parse);}
+  function events(){return completeJSONRecords(output);}
   async function wait(type,count=1){
     const deadline=Date.now()+5000;
     while(events().filter(event=>event.type===type).length<count){
@@ -108,6 +125,22 @@ function fixture(t, options = {}) {
   return {root,host,child,done,events,wait,send:value=>child.stdin.write(JSON.stringify(value)+'\n'),
     pid:()=>Number(fs.readFileSync(path.join(host,'host-pid'),'utf8'))};
 }
+test('fixture JSON reader waits for newline across a fragmented large record and rejects completed malformed JSON',()=>{
+  const first={type:'homebrew-started'};
+  const catalog={type:'homebrew-catalog',games:Array.from({length:500},(_,index)=>({titleId:String(index),name:'🌿'+'x'.repeat(160)}))};
+  const head=JSON.stringify(first)+'\n',record=JSON.stringify(catalog)+'\n';
+  assert.ok(Buffer.byteLength(record)>65536);
+  let output=head+record.slice(0,65536);
+  assert.deepEqual(completeJSONRecords(output),[first]);
+  output+=record.slice(65536,-1);
+  assert.deepEqual(completeJSONRecords(output),[first],'valid JSON without its newline is still pending');
+  output+='\n';
+  assert.deepEqual(completeJSONRecords(output),[first,catalog]);
+  output+='{"type":';
+  assert.deepEqual(completeJSONRecords(output),[first,catalog],'a partial next record must not break earlier events');
+  assert.throws(()=>completeJSONRecords(output+'\n'),SyntaxError,'a completed malformed record must still fail the test');
+  assert.deepEqual(completeJSONRecords('{"type":"waiting"}'),[]);
+});
 test('held proof requires restoration, a live endpoint and deferred donor cleanup',()=>{
   assert.equal(heldResult(held()),true);
   for(const modify of [value=>{value.verified=false;},value=>{value.fs.restored=false;},
@@ -156,6 +189,20 @@ test('choices stay deferred, inherited settings are fixed, status is read-only a
   assert.ok(session.events().some(event=>event.type==='verified'));
   assert.equal(fs.existsSync(path.join(session.host,'group-signal.txt')),false);
   assert.equal(fs.existsSync(path.join(session.host,'runs/mac2jb-active-connect.txt')),false);
+});
+test('held host-ready exposes the current validated five-argument START and preserves normal cleanup',{timeout:10000},async t=>{
+  const session=fixture(t,{pairingPrefix:['V=START(39380,127,0,0,1,0,0,0,0)',
+    'V=START(39380,127,0,0,2)','V=START(39381,127,0,0,1)','V=START(39380,127,0,0,1);PRINT 1']});
+  await session.wait('post-run-ready');
+  const hostReady=session.events().filter(event=>event.type==='host-ready');assert.equal(hostReady.length,1);
+  assert.equal(hostReady[0].startCommand,'V=START(39380,127,0,0,1)');
+  const active=path.join(session.host,'runs/mac2jb-active-connect.txt');
+  assert.equal(fs.readFileSync(active,'utf8'),session.pid()+'\n'+hostReady[0].startCommand+'\n');
+  assert.equal(fs.statSync(active).mode&0o777,0o600);
+  assert.equal(session.events().some(event=>['typing','command-start','transfer-complete'].includes(event.type)),false);
+  session.send({action:'post-run',keepRPC:false,dumpFirmware:false});const result=await session.done;
+  assert.equal(result.code,0,result.output+result.error);assert.ok(session.events().some(event=>event.type==='verified'));
+  assert.equal(fs.existsSync(active),false);
 });
 test('Finish signals only the runner and allows cleanup longer than two seconds',{timeout:10000},async t=>{
   const session=fixture(t,{cleanupMs:2200});await session.wait('post-run-ready');
@@ -256,13 +303,15 @@ test('zero exit without final cleanup cannot claim verification',{timeout:10000}
   const session=fixture(t,{badCleanup:true});await session.wait('post-run-ready');session.send({action:'finish'});
   assert.notEqual((await session.done).code,0);assert.equal(session.events().some(event=>event.type==='verified'),false);
 });
-test('HBLauncher requires confirmed held RPC, runs once, and stops before base RPC cleanup',{timeout:10000},async t=>{
+for(const application of ['hblauncher','gpubrewlauncher','izlauncher'])
+test(application+' requires confirmed held RPC, runs once, and stops before base RPC cleanup',{timeout:10000},async t=>{
   const session=fixture(t,{expectHomebrew:true,hblStopMs:150});await session.wait('post-run-ready');
-  session.send({action:'launch-hblauncher'});await session.wait('action-rejected');
+  session.send({action:'launch-'+application});await session.wait('action-rejected');
   session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
-  session.send({action:'launch-hblauncher'});await session.wait('homebrew-started');await session.wait('homebrew-running');
-  session.send({action:'launch-hblauncher'});session.send({action:'rpc-status'});await session.wait('action-rejected',3);
+  session.send({action:'launch-'+application});await session.wait('homebrew-started');await session.wait('homebrew-running');
+  session.send({action:application==='hblauncher'?'launch-gpubrewlauncher':'launch-hblauncher'});session.send({action:'rpc-status'});await session.wait('action-rejected',3);
   session.send({action:'finish'});const outcome=await session.done;assert.equal(outcome.code,0,outcome.output+outcome.error);
+  assert.equal(fs.existsSync(path.join(session.root,{hblauncher:'hbl-entry-used',gpubrewlauncher:'gpu-entry-used',izlauncher:'iz-entry-used'}[application])),true);
   assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
   assert.equal(fs.readFileSync(path.join(session.root,'homebrew-invocations.txt'),'utf8').trim().split('\n').length,1);
   assert.match(session.events().find(event=>event.type==='verified').message,/retained graphics allocations/);
@@ -271,17 +320,17 @@ for(const terminal of ['failed','stopped'])
   test('Finish after homebrew-'+terminal+' waits for helper close without sending another signal',{timeout:10000},async t=>{
     const session=fixture(t,{expectHomebrew:true,hblTerminal:terminal,hblCloseMs:150});await session.wait('post-run-ready');
     session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
-    session.send({action:'launch-hblauncher'});await session.wait('homebrew-'+terminal);
+    session.send({action:'launch-gpubrewlauncher'});await session.wait('homebrew-'+terminal);
     session.send({action:'finish'});const outcome=await session.done;
     assert.equal(outcome.code,terminal==='failed'?1:0,outcome.output+outcome.error);
     assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
     assert.equal(fs.existsSync(path.join(session.root,'homebrew-extra-signal')),false);
   });
-test('a failed HBLauncher launch leaves Finish available and is never retried',{timeout:10000},async t=>{
+test('a failed GPUBrewLauncher launch leaves Finish available and is never retried',{timeout:10000},async t=>{
   const session=fixture(t,{expectHomebrew:true,hblFail:true,hblCloseMs:150});await session.wait('post-run-ready');
   session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
-  session.send({action:'launch-hblauncher'});await session.wait('homebrew-failed');
-  assert.equal(session.child.exitCode,null);session.send({action:'launch-hblauncher'});await session.wait('action-rejected');
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('homebrew-failed');
+  assert.equal(session.child.exitCode,null);session.send({action:'launch-gpubrewlauncher'});await session.wait('action-rejected');
   session.send({action:'finish'});assert.equal((await session.done).code,1);
   assert.equal(fs.readFileSync(path.join(session.root,'homebrew-invocations.txt'),'utf8').trim().split('\n').length,1);
   assert.equal(fs.existsSync(path.join(session.root,'homebrew-extra-signal')),false);
@@ -289,7 +338,86 @@ test('a failed HBLauncher launch leaves Finish available and is never retried',{
 test('EOF during homebrew setup stops the helper before ending original RPC',{timeout:10000},async t=>{
   const session=fixture(t,{expectHomebrew:true,hblLaunchMs:5000});await session.wait('post-run-ready');
   session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
-  session.send({action:'launch-hblauncher'});await session.wait('homebrew-started');session.child.stdin.end();
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('homebrew-started');session.child.stdin.end();
+  assert.equal((await session.done).code,1);
+  assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
+});
+
+test('GPUBrewLauncher requires positive held proof, owns one app attempt, and finishes before its original host',{timeout:10000},async t=>{
+  const session=fixture(t,{expectHomebrew:true,hblLaunchMs:150,hblStopMs:100});
+  await session.wait('post-run-ready');const originalHost=session.pid();
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('action-rejected');
+  assert.equal(fs.existsSync(path.join(session.root,'gpu-entry-used')),false);
+  session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('homebrew-started');
+  session.send({action:'finish'});await session.wait('action-rejected',2);
+  await session.wait('homebrew-running');
+  for(const action of ['launch-gpubrewlauncher','launch-unavailable','launch-stremio','launch-ouncecake','rpc-status'])
+    session.send({action,consoleAddress:'192.0.2.20'});
+  await session.wait('action-rejected',7);
+  assert.equal(session.pid(),originalHost);
+  assert.equal(fs.readFileSync(path.join(session.root,'gpu-entry-used'),'utf8'),path.join(session.host,'runs/switch2-test'));
+  assert.equal(fs.readFileSync(path.join(session.root,'homebrew-invocations.txt'),'utf8').trim().split('\n').length,1);
+  session.send({action:'finish'});const result=await session.done;assert.equal(result.code,0,result.output+result.error);
+  assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
+  assert.equal(fs.readFileSync(path.join(session.host,'runner-signals.txt'),'utf8'),'TERM\n');
+  assert.equal(fs.existsSync(path.join(session.host,'group-signal.txt')),false);
+});
+test('another homebrew app prevents GPUBrewLauncher in the same held session',{timeout:10000},async t=>{
+  const session=fixture(t,{expectHomebrew:true});await session.wait('post-run-ready');
+  session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
+  fs.copyFileSync(path.join(session.root,'scripts/gui-homebrew.cjs'),path.join(session.root,'scripts/gui-stremio.cjs'));
+  session.send({action:'launch-stremio'});await session.wait('homebrew-running');
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('action-rejected');
+  assert.equal(fs.existsSync(path.join(session.root,'gpu-entry-used')),false);
+  session.send({action:'finish'});assert.equal((await session.done).code,0);
+});
+test('GPUBrewLauncher startup failure consumes its attempt and leaves Finish available',{timeout:10000},async t=>{
+  const session=fixture(t,{expectHomebrew:true,hblFail:true});await session.wait('post-run-ready');
+  session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('homebrew-failed');
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('action-rejected');
+  session.send({action:'finish'});const result=await session.done;assert.equal(result.code,1,result.output+result.error);
+  assert.equal(fs.readFileSync(path.join(session.root,'homebrew-invocations.txt'),'utf8').trim().split('\n').length,1);
+  assert.equal(session.events().some(event=>event.type==='verified'),false);
+  assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
+});
+for(const application of ['hblauncher','gpubrewlauncher','izlauncher','stremio'])test(application+' unexpected zero exit cannot claim shutdown or final verification',{timeout:10000},async t=>{
+  const session=fixture(t);fs.writeFileSync(path.join(session.root,'scripts/gui-'+application+'.cjs'),
+    "console.log('MAC2JB_HOMEBREW '+JSON.stringify({type:'started'}));process.exitCode=0;\n");
+  await session.wait('post-run-ready');session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
+  session.send({action:'launch-'+application});await session.wait('homebrew-failed');
+  session.send({action:'launch-'+application});await session.wait('action-rejected');
+  if(['izlauncher','stremio'].includes(application))session.child.stdin.end();else session.send({action:'finish'});
+  const result=await session.done;assert.equal(result.code,1,result.output+result.error);
+  assert.equal(session.events().some(event=>event.type==='verified'),false);
+});
+for(const application of ['izlauncher','stremio'])test(application+' uncertain shutdown retains original native resources and blocks Finish',{timeout:10000},async t=>{
+  const session=fixture(t);fs.writeFileSync(path.join(session.root,'scripts/gui-'+application+'.cjs'),
+    "console.log('MAC2JB_HOMEBREW '+JSON.stringify({type:'failed',cleanupBlocked:true,message:'Native shutdown uncertain'}));process.exitCode=1;\n");
+  await session.wait('post-run-ready');session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
+  session.send({action:'launch-'+application});const failure=await session.wait('homebrew-failed');
+  assert.equal(failure.cleanupBlocked,true);
+  session.send({action:'finish'});await session.wait('action-rejected');
+  assert.equal(fs.existsSync(path.join(session.host,'runner-signals.txt')),false);
+  session.child.stdin.end();assert.equal((await session.done).code,1);
+  assert.equal(fs.existsSync(path.join(session.host,'runner-signals.txt')),false);
+  assert.equal(session.events().some(row=>row.type==='verified'),false);
+});
+test('Stremio short receive with confirmed native shutdown still permits normal held-session cleanup',{timeout:10000},async t=>{
+  const session=fixture(t,{expectHomebrew:true});fs.writeFileSync(path.join(session.root,'scripts/gui-stremio.cjs'),
+    "process.stdin.resume();process.stdin.on('end',()=>{require('fs').writeFileSync('homebrew-stop-completed','yes');console.log('MAC2JB_HOMEBREW '+JSON.stringify({type:'failed',cleanupBlocked:false,message:'Short receive; native workers joined'}));process.exitCode=1;});\n");
+  await session.wait('post-run-ready');session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
+  session.send({action:'launch-stremio'});const failure=await session.wait('homebrew-failed');assert.equal(failure.cleanupBlocked,false);
+  session.send({action:'finish'});assert.equal((await session.done).code,1);
+  assert.equal(fs.readFileSync(path.join(session.host,'runner-signals.txt'),'utf8'),'TERM\n');
+  assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
+  assert.equal(session.events().some(row=>row.type==='action-rejected'),false);
+});
+test('EOF during GPUBrewLauncher startup stops its helper before base RPC cleanup',{timeout:10000},async t=>{
+  const session=fixture(t,{expectHomebrew:true,hblLaunchMs:5000});await session.wait('post-run-ready');
+  session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('homebrew-started');session.child.stdin.end();
   assert.equal((await session.done).code,1);
   assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
 });
@@ -302,12 +430,24 @@ test('Stremio rejects invalid library configuration before consuming its one-app
   assert.equal(fs.existsSync(path.join(session.root,'homebrew-invocations.txt')),false);
   session.send({action:'finish'});assert.equal((await session.done).code,0);
 });
+test('invalid Stremio quality leaves the one-app gate available',{timeout:10000},async t=>{
+  const session=fixture(t,{expectHomebrew:true});
+  await session.wait('post-run-ready');session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
+  let rejected=0;
+  for(const quality of ['1080p','4k','720p --unsafe',720,null,{},['720p']]) {
+    session.send({action:'launch-stremio',quality});await session.wait('action-rejected',++rejected);
+  }
+  assert.equal(fs.existsSync(path.join(session.root,'homebrew-invocations.txt')),false);
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('homebrew-running');
+  session.send({action:'finish'});assert.equal((await session.done).code,0);
+});
 test('unsupported homebrew actions leave the supported launcher available',{timeout:10000},async t=>{
   const session=fixture(t,{expectHomebrew:true});
   await session.wait('post-run-ready');session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
-  session.send({action:'launch-unavailable'});await session.wait('action-rejected');
+  session.send({action:'launch-unknown-launcher'});await session.wait('action-rejected');
+  session.send({action:'launch-unavailable'});await session.wait('action-rejected',2);
   assert.equal(fs.existsSync(path.join(session.root,'homebrew-invocations.txt')),false);
-  session.send({action:'launch-hblauncher'});await session.wait('homebrew-running');
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('homebrew-running');
   session.send({action:'finish'});assert.equal((await session.done).code,0);
   assert.equal(fs.readFileSync(path.join(session.root,'homebrew-invocations.txt'),'utf8').trim().split('\n').length,1);
 });
@@ -316,16 +456,17 @@ test('Stremio launch keeps add-on configuration on helper stdin and retains the 
   const session=fixture(t,{expectHomebrew:true});
   const helper=fs.readFileSync(path.join(session.root,'scripts/gui-homebrew.cjs'),'utf8');
   fs.writeFileSync(path.join(session.root,'scripts/gui-stremio.cjs'),
-    "let config='';process.stdin.on('data',b=>config+=b);process.stdin.on('end',()=>{require('fs').writeFileSync('stremio-config.json',config);console.log('MAC2JB_HOMEBREW '+JSON.stringify({type:'account-progress',watchProgress:{sequence:1,itemId:'PRIVATEWATCH',position:3,duration:30}}));});process.stdin.resume();\n"+helper);
+    "require('fs').writeFileSync('stremio-args.json',JSON.stringify(process.argv.slice(3)));let config='';process.stdin.on('data',b=>config+=b);process.stdin.on('end',()=>{require('fs').writeFileSync('stremio-config.json',config);console.log('MAC2JB_HOMEBREW '+JSON.stringify({type:'account-progress',watchProgress:{sequence:1,itemId:'PRIVATEWATCH',position:3,duration:30}}));});process.stdin.resume();\n"+helper);
   await session.wait('post-run-ready');session.send({action:'post-run',keepRPC:true,dumpFirmware:false});await session.wait('rpc-held');
   const addonUrls=['https://example.invalid/private-provider/manifest.json'];
   const libraryItems=Array.from({length:200},(_,index)=>({_id:'fixture:'+index,name:'Private library '+ 'x'.repeat(512),state:{timeOffset:52000}}));
-  session.send({action:'launch-stremio',addonUrls,libraryItems});
+  session.send({action:'launch-stremio',addonUrls,libraryItems,quality:'720p'});
   await session.wait('homebrew-running');assert.deepEqual(JSON.parse(fs.readFileSync(path.join(session.root,'stremio-config.json'),'utf8')),{addonUrls,libraryItems});
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(session.root,'stremio-args.json'),'utf8')),['--quality','720p']);
   assert.equal((await session.wait('account-progress')).watchProgress.itemId,'PRIVATEWATCH');
   assert.equal(session.events().filter(event=>event.type==='log').some(event=>/PRIVATEWATCH|Private library/.test(event.message)),false);
   assert.equal(fs.readFileSync(path.join(session.root,'homebrew-invocations.txt'),'utf8').includes('private-provider'),false);
-  session.send({action:'launch-hblauncher'});await session.wait('action-rejected');
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('action-rejected');
   session.send({action:'finish'});assert.equal((await session.done).code,0);
   assert.equal(fs.readFileSync(path.join(session.host,'hbl-was-stopped.txt'),'utf8'),'true');
 });
@@ -388,7 +529,7 @@ test('OunceCake requires confirmed held RPC, an explicit console IP and one tool
   session.send({action:'launch-ouncecake',consoleAddress:'192.0.2.20'});const catalog=await session.wait('homebrew-catalog');
   assert.deepEqual(catalog.games,[ounceGame]);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(session.root,'ounce-config.json'),'utf8')),{consoleAddress:'192.0.2.20',port:2121});
-  session.send({action:'launch-hblauncher'});await session.wait('action-rejected',4);
+  session.send({action:'launch-gpubrewlauncher'});await session.wait('action-rejected',4);
   session.send({action:'select-ouncecake-game',titleId:ounceGame.titleId});const running=await session.wait('homebrew-running');
   assert.equal(running.host,'192.0.2.20');assert.equal(running.port,2121);assert.equal(running.ftpURL,'ftp://192.0.2.20:2121');
   session.send({action:'finish'});assert.equal((await session.done).code,0);

@@ -7,33 +7,36 @@ async function inspectMountedFilesystem(s, name = 'save') {
   check(['save', 'tmp'].includes(name), 'Only the inspected application mounts are supported');
   const captured = require("./mounts.json");
   check(captured.session === live.session, 'Save mount inspection belongs to another boot');
-  const mount = captured.mounts.find(m => m.name === name);
-  check(mount, 'Save mount was not inspected');
+  let mount = captured.mounts.find(m => m.name === name);
+  if (!mount && name === 'tmp') {
+    mount = captured.mounts.find(m => m.name === 'save');
+  }
+  check(mount, `${name === 'save' ? 'Save' : 'Tmp'} mount was not inspected`);
   for (const entry of layout.verifiedFunctions) {
     check((await s.read(live.sdk + entry.offset, entry.bytes.length / 2)).toString('hex') === entry.bytes,
       'SDK mount implementation changed');
   }
   const accessor = await s.read(mount.accessor, 48);
-  check(accessor.subarray(24, 40).toString('utf8').split('\0')[0] === name &&
-    Number(accessor.readBigUInt64LE(40)) === mount.implementation, 'Save mount changed');
+  check(accessor.subarray(24, 40).toString('utf8').split('\0')[0] === mount.name &&
+    Number(accessor.readBigUInt64LE(40)) === mount.implementation, `${mount.name} mount changed`);
   const implementation = await s.read(mount.implementation, 24);
-  check(Number(implementation.readBigUInt64LE(16)) === mount.service, 'Save service changed');
+  check(Number(implementation.readBigUInt64LE(16)) === mount.service, `${mount.name} service changed`);
   const service = await s.read(mount.service, 32);
-  check(Number(service.readBigUInt64LE()) === mount.serviceVtable, 'Save service type changed');
+  check(Number(service.readBigUInt64LE()) === mount.serviceVtable, `${mount.name} service type changed`);
   const manager = Number(service.readBigUInt64LE(16)), objectId = service.readUInt32LE(24);
   const state = await s.read(manager, 0x80);
   check(state.readUInt32LE(8) === 0x800 && state.readUInt32LE(0x5c) === 3, 'Unexpected SDK session manager');
   const slots = Number(state.readBigUInt64LE(16));
   const borrowed = (await s.read(slots, 4)).readUInt32LE();
-  check(borrowed > 0 && borrowed < 0xffff8000 && objectId > 0, 'Invalid borrowed save session');
-  return {name, borrowed, objectId, manager};
+  check(borrowed > 0 && borrowed < 0xffff8000 && objectId > 0, `Invalid borrowed ${mount.name} session`);
+  return {name: mount.name, borrowed, objectId, manager};
 }
 
 async function cloneMountedFilesystem(s, name = 'save') {
-  const {borrowed, objectId} = await inspectMountedFilesystem(s, name);
-  const reply = await domain.send(s, 'Copy existing save filesystem', borrowed, domain.wire.control(1, u32(objectId)));
+  const {name: resolvedName, borrowed, objectId} = await inspectMountedFilesystem(s, name);
+  const reply = await domain.send(s, `Copy existing ${resolvedName} filesystem`, borrowed, domain.wire.control(1, u32(objectId)));
   const handle = domain.oneHandle(reply);
-  await s.record({operation: 'MountedFilesystemCopied', name, borrowed, objectId, handle});
+  await s.record({operation: 'MountedFilesystemCopied', name: resolvedName, requestedName: name, borrowed, objectId, handle});
   return handle;
 }
 

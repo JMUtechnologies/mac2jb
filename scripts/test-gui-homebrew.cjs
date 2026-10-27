@@ -3,11 +3,11 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {Readable}=require('node:stream');
-const {main,validateRun,proxyHandler,runtimeEnvironment,stages,owners}=require('./gui-homebrew.cjs');
+const {main,validateRun,proxyHandler,runtimeEnvironment,stages,owners,applicationConfig}=require('./gui-homebrew.cjs');
 function fixture(t,options={}){
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'mac2jb-homebrew-test-')));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  const directory=path.join(root,'vendor/ns2jb/runs/switch2-source'),vendor=path.join(root,'vendor/HBLauncher');
+  const application=applicationConfig(options.application),directory=path.join(root,'vendor/ns2jb/runs/switch2-source'),vendor=path.join(root,'vendor',application.vendor);
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
   fs.mkdirSync(path.join(vendor,'smilebasic/engine/shared'),{recursive:true});
   fs.writeFileSync(path.join(vendor,'smilebasic/engine/shared/rpc.cjs'),'// exact mocked upstream RPC module\n',{mode:0o600});
@@ -15,12 +15,12 @@ function fixture(t,options={}){
   fs.writeFileSync(path.join(directory,'connection.json'),JSON.stringify({port:12345,addresses}),{mode:0o600});
   fs.writeFileSync(path.join(directory,'result.json'),JSON.stringify({verified:true,fs:{verified:true,restored:true,
     cleanup:{deferred:true},retainedEndpoint:{ready:true}},rpc:{mode:'held',state:'listening'}}),{mode:0o600});
-  const trace=path.join(root,'order.txt'),all=[...stages.map(value=>({script:value[0],role:'prepare',args:value.slice(1)})),...owners];
+  const trace=path.join(root,'order.txt'),all=[...stages.map(value=>({script:value[0],role:'prepare',args:value.slice(1)})),...application.owners];
   for(const item of all){
     const file=path.join(vendor,item.script);fs.mkdirSync(path.dirname(file),{recursive:true});
     fs.writeFileSync(file,[
       "const fs=require('fs'),path=require('path');const directory=process.argv[2];",
-      'const options='+JSON.stringify(options)+',item='+JSON.stringify(item)+',trace='+JSON.stringify(trace)+';',
+      'const options='+JSON.stringify(options)+',item='+JSON.stringify(item)+',trace='+JSON.stringify(trace)+',frameReady='+JSON.stringify(application.frameReady)+';',
       "const log=value=>fs.appendFileSync(trace,JSON.stringify(value)+'\\n');",
       "const session=path.basename(directory);log({event:'start',script:item.script,args:process.argv.slice(3)});",
       "if(options.failStage===item.script)process.exit(1);",
@@ -28,7 +28,7 @@ function fixture(t,options={}){
       "if(options.stallStage===item.script){process.on('SIGTERM',()=>{log({event:'stop',role:'prepare'});process.exit(0);});console.log('STAGE_READY');setInterval(()=>{},1000);}",
       'else process.exit(0);',
       '}else{',
-      "if(item.role==='graphics'){fs.writeFileSync(path.join(directory,'launcher-auto-loop.json'),JSON.stringify({session,threadRunning:true}));console.log('HBLauncher continuous native frame loop running.');}",
+      "if(item.role==='graphics'){fs.writeFileSync(path.join(directory,'launcher-auto-loop.json'),JSON.stringify({session,threadRunning:true}));console.log(options.frameMarker||frameReady);}",
       "if(item.role==='audio')fs.writeFileSync(path.join(directory,'game-audio.json'),JSON.stringify({session}));",
       "process.on('SIGTERM',()=>{log({event:'stop',role:item.role});setTimeout(()=>{",
       "if(item.role==='graphics')fs.writeFileSync(path.join(directory,'launcher-auto-loop.json'),JSON.stringify({session,threadRunning:false,completed:'now'}));",
@@ -40,7 +40,7 @@ function fixture(t,options={}){
   const api={root,verifySession:async candidate=>({root:candidate,session:path.basename(candidate)}),
     checkRuntime:async()=>{},request:async(run,body)=>{requests.push({run,body});return {ready:true};},
     serveProxy:async()=>({port:23456,token:'ab'.repeat(32),close:async()=>{fs.appendFileSync(trace,JSON.stringify({event:'proxy-close'})+'\n');}}),
-    startTimeoutMs:2000,stopTimeoutMs:500,
+    startTimeoutMs:2000,stopTimeoutMs:500,...(options.application?{application:options.application}:{}),
     emit:(type,value)=>{events.push({type,...value});if(type==='running')setImmediate(()=>process.emit('SIGTERM'));}};
   return {root,directory,vendor,trace,events,requests,api,addresses};
 }
@@ -52,12 +52,33 @@ test('runtime tools are portable and Python user configuration is excluded',()=>
   assert.equal(env.PYTHONNOUSERSITE,'1');assert.equal(env.PYTHONDONTWRITEBYTECODE,'1');
   assert.equal(env.MAC2JB_HBLAUNCHER_FONT,'/private/runtime/homebrew/fonts/DejaVuSans.ttf');
 });
+test('GPUBrewLauncher selects its pinned snapshot, own assets and exact graphics markers',()=>{
+  const selected=applicationConfig('gpubrewlauncher');
+  assert.equal(selected.vendor,'GPUBrewLauncher');assert.equal(selected.version,'snapshot-f35ff64');
+  assert.equal(selected.source.commit,'f35ff64ea4b9b42cf2a75095d24662fe250f03e4');
+  assert.equal(selected.owners.find(owner=>owner.role==='graphics').ready,'GPUBrewLauncher game event source ready.');
+  assert.equal(selected.frameReady,'GPUBrewLauncher continuous native frame loop running.');
+  assert.deepEqual(selected.owners.filter(owner=>owner.role!=='graphics'),owners.filter(owner=>owner.role!=='graphics'));
+  assert.equal(applicationConfig().frameReady,'GPUBrewLauncher continuous native frame loop running.');
+  assert.equal(runtimeEnvironment('/private/runtime').HB_APPS_DIR,'/private/runtime/vendor/GPUBrewLauncher/apps');
+});
+test('HBLauncher selects its frozen release, separate app library and exact readiness markers',()=>{
+  const selected=applicationConfig('hblauncher');
+  assert.equal(selected.vendor,'HBLauncher');assert.equal(selected.version,'0.2.0');
+  assert.equal(selected.source.tag,'v0.2.0');assert.equal(selected.source.commit,'b40723be04baa51e5d1f121a1e2242c4167b6cbc');
+  assert.equal(selected.owners.find(owner=>owner.role==='graphics').ready,'HBLauncher game event source ready.');
+  assert.equal(selected.frameReady,'HBLauncher continuous native frame loop running.');
+  assert.equal(runtimeEnvironment('/private/runtime',{},'hblauncher').HB_APPS_DIR,'/private/runtime/vendor/HBLauncher/apps');
+  assert.equal(applicationConfig().vendor,'GPUBrewLauncher');
+});
 test('unsupported launcher selection cannot contact RPC or consume the one-app gate',async t=>{
   const f=fixture(t);
-  await assert.rejects(main([f.directory],{...f.api,application:'unavailable'}),/Unknown homebrew application/);
+  for(const application of ['unavailable','unknown-launcher']) {
+    await assert.rejects(main([f.directory],{...f.api,application}),/Unknown homebrew application/);
+    assert.throws(()=>runtimeEnvironment(f.root,{},application),/Unknown homebrew application/);
+  }
   assert.equal(f.requests.length,0);
   assert.equal(fs.existsSync(path.join(f.directory,'.mac2jb-hblauncher-attempt.json')),false);
-  assert.throws(()=>runtimeEnvironment(f.root,{},'unavailable'),/Unknown homebrew application/);
 });
 async function exchange(handler,{token='secret',body={command:'status'},method='POST',url='/'}={}){
   const bytes=Buffer.isBuffer(body)?body:Buffer.from(JSON.stringify(body));
@@ -101,8 +122,37 @@ test('attach uses existing held connection, separate authenticated metadata and 
   assert.ok(f.events.some(row=>row.type==='running'));assert.equal(f.events.at(-1).type,'stopped');
   await assert.rejects(main([f.directory],f.api),/EEXIST/);
 });
-test('a stage failure stops once and never retries or reaches live rendering',{timeout:10000},async t=>{
-  const f=fixture(t,{failStage:'homebrew-launcher/inspect-input.cjs'});
+for(const application of ['hblauncher','gpubrewlauncher'])
+test(application+' entry attaches once to the same held proof and preserves shutdown ownership order',{timeout:10000},async t=>{
+  const selected=applicationConfig(application),f=fixture(t,{application}),original=fs.readFileSync(path.join(f.directory,'connection.json'));
+  const result=await require('./gui-'+application+'.cjs').main([f.directory],{...f.api,application:'unavailable'});
+  assert.equal(result.stopped,true);assert.deepEqual(fs.readFileSync(path.join(f.directory,'connection.json')),original);
+  const report=JSON.parse(fs.readFileSync(path.join(result.directory,'mac2jb-homebrew.json')));
+  assert.equal(report.application,application);assert.equal(report.source.commit,selected.source.commit);
+  assert.equal(report.sourceSession,'switch2-source');assert.equal(report.resourcesRetained,true);
+  const connection=JSON.parse(fs.readFileSync(path.join(result.directory,'connection.json')));
+  assert.deepEqual(connection.addresses,{...f.addresses,session:path.basename(result.directory)});
+  assert.equal(connection.port,23456);assert.equal(connection.token,'ab'.repeat(32));
+  const trace=fs.readFileSync(f.trace,'utf8').trim().split('\n').map(JSON.parse),started=trace.filter(row=>row.event==='start');
+  assert.deepEqual(started.slice(0,6).map(row=>[row.script,...row.args]),stages);
+  assert.equal(started.some(row=>/start-launcher|smilebasic\/host|pico/.test(row.script)),false);
+  assert.deepEqual(trace.filter(row=>row.event==='stop').map(row=>row.role),['ftp','audio','graphics']);assert.equal(trace.at(-1).event,'proxy-close');
+  assert.ok(f.events.some(row=>row.type==='running'&&row.message.includes(selected.name)));
+  assert.equal(f.events.at(-1).type,'stopped');assert.match(f.events.at(-1).message,/allocations remain owned/);
+  const marker=JSON.parse(fs.readFileSync(path.join(f.directory,'.mac2jb-hblauncher-attempt.json')));
+  assert.equal(marker.application,application);await assert.rejects(main([f.directory],f.api),/EEXIST/);
+});
+for(const application of ['hblauncher','gpubrewlauncher'])
+test(application+' requires its own exact native frame marker before reporting running',{timeout:10000},async t=>{
+  const other=application==='hblauncher'?'gpubrewlauncher':'hblauncher';
+  const f=fixture(t,{application,frameMarker:applicationConfig(other).frameReady});
+  await assert.rejects(main([f.directory],{...f.api,startTimeoutMs:200}),/console graphics readiness timed out/);
+  assert.equal(f.events.some(row=>row.type==='running'),false);assert.equal(f.events.at(-1).type,'failed');
+  assert.equal(fs.readFileSync(f.trace,'utf8').trim().split('\n').map(JSON.parse).filter(row=>row.event==='start').length,9);
+});
+for(const application of ['hblauncher','gpubrewlauncher'])
+test(application+' stage failure stops once and never retries or reaches live rendering',{timeout:10000},async t=>{
+  const f=fixture(t,{application,failStage:'homebrew-launcher/inspect-input.cjs'});
   await assert.rejects(main([f.directory],f.api),/preparation failed/);
   const trace=fs.readFileSync(f.trace,'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(trace.filter(row=>row.event==='start'&&row.script==='homebrew-launcher/inspect-input.cjs').length,1);
@@ -116,8 +166,9 @@ test('cancelling an in-flight setup stage stops it without replaying RPC or setu
   assert.equal(trace.filter(row=>row.event==='start').length,1);assert.equal(f.requests.length,1);
   assert.equal(f.events.some(row=>row.type==='running'),false);assert.equal(f.events.at(-1).type,'failed');
 });
-test('unconfirmed audio shutdown cannot claim homebrew stopped cleanly',{timeout:10000},async t=>{
-  const f=fixture(t,{badAudioStop:true});await assert.rejects(main([f.directory],f.api),/shutdown/);
+for(const application of ['hblauncher','gpubrewlauncher'])
+test(application+' unconfirmed audio shutdown cannot claim homebrew stopped cleanly',{timeout:10000},async t=>{
+  const f=fixture(t,{application,badAudioStop:true});await assert.rejects(main([f.directory],f.api),/shutdown/);
   assert.equal(f.events.at(-1).type,'failed');assert.equal(f.events.some(row=>row.type==='stopped'),false);
 });
 test('foreign runs, wrong native identity and public connection files cannot attach',async t=>{

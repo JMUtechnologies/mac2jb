@@ -13,8 +13,10 @@ function fixture(t, actualHost = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mac2jb-fork-test-'));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   fs.mkdirSync(path.join(root, 'scripts'));
-  for (const name of ['gui-host.cjs', 'host-wrapper.cjs'])
+  for (const name of ['gui-host.cjs', 'host-wrapper.cjs', 'host-profiles.cjs'])
     fs.copyFileSync(path.join(__dirname, name), path.join(root, 'scripts', name));
+  fs.mkdirSync(path.join(root, 'packaging'));
+  fs.copyFileSync(path.join(repository, 'packaging/host-profiles.json'), path.join(root, 'packaging/host-profiles.json'));
   const host = path.join(root, 'vendor/ns2jb');
   fs.mkdirSync(host, {recursive: true});
   if (actualHost) fs.cpSync(path.join(repository, 'vendor/ns2jb'), host, {
@@ -41,15 +43,24 @@ function launch(t, fixture, adapter, args) {
     try {process.kill(-child.pid, 'SIGKILL');} catch {}
     await done;
   });
-  return {child, done, output: () => output, recordHost: pid => {hostPid = pid;}};
+  return {child, done, output: () => output, error:()=>error, recordHost: pid => {hostPid = pid;}};
 }
 
 async function until(predicate, message, deadline = 5000) {
   const start = Date.now();
   while (!predicate()) {
-    assert.ok(Date.now() - start < deadline, message);
+    assert.ok(Date.now() - start < deadline, typeof message==='function'?message():message);
     await new Promise(resolve => setTimeout(resolve, 15));
   }
+}
+
+function forkStartLines(adapter, output) {
+  // GUI events may include the same command in structured fields. Only raw
+  // fork log messages establish which BASIC forms the unmodified fork printed.
+  const complete=output.split('\n').slice(0,-1);
+  const messages=adapter==='gui-host.cjs' ? complete.map(JSON.parse)
+    .filter(event=>event.type==='log').map(event=>event.message) : complete;
+  return messages.map(line=>line.trim()).filter(line=>/^V=START\(\d+(?:,\d+)+\)$/.test(line));
 }
 
 function greeting() {
@@ -70,6 +81,15 @@ test('transmitted bootstrap is the exact five-argument fork bootstrap', () => {
   assert.equal(parseHello(greeting()).platform, 2);
 });
 
+test('fork log assertions ignore structured START fields and an unfinished GUI event',()=>{
+  const five='V=START(39380,127,0,0,1)',nine='V=START(39380,127,0,0,1,0,0,0,0)';
+  const output=[{type:'host-ready',startCommand:five},{type:'log',message:'  '+five},
+    {type:'log',message:'  '+nine}].map(JSON.stringify).join('\n')+'\n';
+  assert.equal((output.match(/V=START\(/g)||[]).length,3);
+  assert.deepEqual(forkStartLines('gui-host.cjs',output+'{"type":"log","message":"V=START('),[five,nine]);
+  assert.deepEqual(forkStartLines('host-wrapper.cjs',five+'\n'+nine+'\n'),[five,nine]);
+});
+
 test('CLI host settings override inherited modes while preserving explicit --rpc', async t => {
   const source = fixture(t, false);
   fs.writeFileSync(path.join(source.host, 'run.cjs'), `
@@ -83,6 +103,37 @@ test('CLI host settings override inherited modes while preserving explicit --rpc
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(source.host, 'settings.json'))),
     {arity: '5', rpc: '0', args: ['--rpc', '127.0.0.1']});
 });
+
+for(const id of ['pepsipu','kurumuz']) test(`GUI pairs with the actual pinned ${id} host and its unchanged bootstrap protocol`,
+  {timeout:10000},async t=>{
+    const {profileById,validStartCommand}=require('./host-profiles.cjs');
+    const profile=profileById(id),source=fixture(t,false);
+    fs.cpSync(path.join(repository,profile.sourceDirectory),source.host,{recursive:true});
+    fs.writeFileSync(path.join(source.root,'selected-host.json'),JSON.stringify(profile));
+    const runner=launch(t,source,'gui-host.cjs',['host','127.0.0.1']);
+    await until(()=>fs.existsSync(source.active),()=>`No ${id} pairing: `+runner.output()+runner.error());
+    const record=fs.readFileSync(source.active,'utf8').trim().split('\n');
+    runner.recordHost(Number(record[0]));
+    assert.equal(validStartCommand(record[1],profile,'127.0.0.1'),true);
+    const hello=greeting();
+    if(profile.startArgumentCount===9) {
+      const fields=record[1].slice(8,-1).split(',');
+      assert.equal(fields.length,9);
+      for(let index=0;index<4;index++)hello.writeBigUInt64LE(BigInt(fields[index+5]),(index+11)*8);
+    }
+    // Authenticate only the initial protocol greeting, then disconnect before
+    // executing a native request. No USB or console is involved.
+    const socket=net.connect(39380,'127.0.0.1');t.after(()=>socket.destroy());
+    await new Promise((resolve,reject)=>{
+      socket.once('error',reject);
+      socket.once('data',()=>{socket.destroy();resolve();});
+      socket.once('connect',()=>socket.write(hello));
+    });
+    const result=await runner.done;
+    assert.equal(result.code,1,result.output+result.error);
+    assert.match(result.output,/Connected\. Checking the application/);
+    assert.equal(fs.existsSync(source.active),false);
+  });
 
 for (const adapter of ['gui-host.cjs', 'host-wrapper.cjs']) {
   test(`${adapter} ignores wrong arity and malformed values and publishes only the five-argument command`, async t => {
@@ -117,7 +168,7 @@ for (const adapter of ['gui-host.cjs', 'host-wrapper.cjs']) {
       const source = fixture(t);
       const args = adapter === 'gui-host.cjs' ? ['host', '127.0.0.1'] : ['127.0.0.1'];
       const runner = launch(t, source, adapter, args);
-      await until(() => fs.existsSync(source.active), 'Host did not publish its command: ' + runner.output());
+      await until(() => fs.existsSync(source.active), ()=>'Host did not publish its command:\n'+runner.output()+runner.error());
       const record = fs.readFileSync(source.active, 'utf8').trim().split('\n');
       runner.recordHost(Number(record[0]));
       assert.equal(record[1], 'V=START(39380,127,0,0,1)');
@@ -125,8 +176,14 @@ for (const adapter of ['gui-host.cjs', 'host-wrapper.cjs']) {
       assert.equal(fs.statSync(path.dirname(source.active)).mode & 0o777, 0o700);
       // The fork also logs a compatibility fallback. It must not replace the
       // five-argument record that the bundled bootstrap and C sender require.
-      await until(() => (runner.output().match(/V=START\(/g) || []).length === 2,
-        'The actual host did not print both START forms');
+      const expectedForms=[record[1],'V=START(39380,127,0,0,1,0,0,0,0)'];
+      await until(() => forkStartLines(adapter,runner.output()).length>=2,
+        ()=>'The actual host did not log both START forms:\n'+runner.output());
+      assert.deepEqual(forkStartLines(adapter,runner.output()),expectedForms);
+      if(adapter==='gui-host.cjs') {
+        const events=runner.output().split('\n').slice(0,-1).map(JSON.parse);
+        assert.equal(events.find(event=>event.type==='host-ready').startCommand,record[1]);
+      }
       assert.equal(fs.readFileSync(source.active, 'utf8').trim().split('\n')[1], record[1]);
 
       // A valid greeting verifies the preserved BASIC wire format. Close on the

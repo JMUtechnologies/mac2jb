@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// No console commands: verify the packaged tools against real HBLauncher assets.
+// No console commands: verify the packaged tools against both launcher catalogs.
 const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
 const crypto=require('node:crypto'),{execFile}=require('node:child_process'),{promisify}=require('node:util');
 const run=promisify(execFile);
@@ -14,21 +14,32 @@ async function main(root=path.resolve(__dirname,'..')) {
     if(crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex')!==entry.sha256)
       throw Error('Changed homebrew dependency: '+entry.path);
   }
-  const env=require('./gui-homebrew.cjs').runtimeEnvironment(root);
+  const {runtimeEnvironment,applicationConfig}=require('./gui-homebrew.cjs');
+  const inherited={...process.env},env=runtimeEnvironment(root,inherited);
   delete process.env.PYTHONHOME;Object.assign(process.env,env);
   const version=await run(path.join(runtime,'python/bin/python3'),['-c','import sys,PIL; print(sys.version.split()[0], PIL.__version__)'],{env});
   if(version.stdout.trim()!=='3.13.17 13.0.0')throw Error('Unexpected Python/Pillow versions');
-  const catalog=require(path.join(root,'vendor/HBLauncher/homebrew-launcher/app-catalog.cjs'));
-  const data=await catalog.scan(path.join(root,'vendor/HBLauncher/apps'));
-  if(data.rejected.length||!data.apps.length)throw Error('Bundled app validation failed: '+JSON.stringify(data.rejected));
-  const scratch=await fs.mkdtemp(path.join(os.tmpdir(),'mac2jb-hbl-check-'));
+  const scratch=await fs.mkdtemp(path.join(os.tmpdir(),'mac2jb-launcher-check-'));
   try {
-    await catalog.raster(data,scratch,'packaged');
+    for(const application of ['hblauncher','gpubrewlauncher']) {
+      const selected=applicationConfig(application),vendor=path.join(root,'vendor',selected.vendor);
+      const launcherEnv=runtimeEnvironment(root,inherited,application);Object.assign(process.env,launcherEnv);
+      const catalog=require(path.join(vendor,'homebrew-launcher/app-catalog.cjs'));
+      const data=await catalog.scan(launcherEnv.HB_APPS_DIR);
+      if(data.rejected.length||!data.apps.length)throw Error(selected.name+' bundled app validation failed: '+JSON.stringify(data.rejected));
+      const required=application==='hblauncher'?['hello-world','ftpd-sb']:['hello-world','froggy-road','ftpd-sb'];
+      for(const id of required)
+        if(!data.apps.some(app=>app.id===id))throw Error('Missing bundled '+selected.name+' app: '+id);
+      for(const stage of ['vert','frag','comp'])
+        await run(launcherEnv.SPIRV_VAL,['--target-env','vulkan1.0',path.join(vendor,'homebrew-launcher/shaders/launcher.'+stage+'.spv')],{env:launcherEnv});
+      const target=path.join(scratch,selected.id);await fs.mkdir(target);
+      await catalog.raster(data,target,'packaged');
+      console.log(selected.name+': portable Python/Pillow/font, shader validation, '+data.apps.length+' bundled apps and catalog raster passed; no console commands sent.');
+    }
     const malformed=path.join(scratch,'invalid.spv');await fs.writeFile(malformed,Buffer.alloc(24));
     let rejected=false;
     try{await run(env.SPIRV_VAL,['--target-env','vulkan1.0',malformed],{env});}catch{rejected=true;}
     if(!rejected)throw Error('Shader validator accepted malformed SPIR-V');
-    console.log('HBLauncher v0.2.0: portable Python/Pillow/font, shader validation, bundled apps and catalog raster passed; no console commands sent.');
   } finally {await fs.rm(scratch,{recursive:true,force:true});}
 }
 module.exports={main};

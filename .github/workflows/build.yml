@@ -77,8 +77,11 @@ jobs:
           (cd vendor/ns2jb && shasum -a 256 -c SHA256SUMS)
           (cd vendor/HBLauncher && shasum -a 256 -c ../../packaging/HBLauncher-v0.2.0-SHA256SUMS)
           node scripts/prepare-bootstrap.cjs --check
+          node scripts/prepare-host-profiles.cjs --check
+          node scripts/prepare-izlauncher.cjs --check-source
           node scripts/prepare-homebrew-apps.cjs --check
           node --test vendor/ns2jb/test.cjs vendor/ns2jb/engine/switch2/retained/*.test.cjs vendor/ns2jb/engine/switch2/ro/layout.test.cjs scripts/test-gui-host.cjs scripts/test-gui-session.cjs scripts/test-gui-homebrew.cjs scripts/test-gui-stremio.cjs scripts/test-gui-dump.cjs scripts/test-fork-integration.cjs scripts/test-start-command.cjs scripts/test-bootstrap-progress.cjs scripts/test-driver-package.cjs scripts/test-homebrew-apps.cjs
+          node --test scripts/test-host-profiles.cjs scripts/test-rpc-attachment.cjs scripts/test-gui-attach.cjs scripts/test-gui-izlauncher.cjs scripts/test-izlauncher-runtime.cjs
 
       - name: Verify experimental media protocol and Stremio addon client
         run: node --test stremio/*.test.cjs stremio/test-*.cjs
@@ -113,12 +116,20 @@ jobs:
         run: bash scripts/test-homebrew-state.sh
 
       - name: Verify start-screen session modes
-        run: bash scripts/test-session-run-mode.sh
+        run: |
+          bash scripts/test-session-run-mode.sh
+          bash scripts/test-existing-rpc.sh
 
       - name: Verify current Mac network selection and safe startup recovery
         run: bash scripts/test-network-selection.sh
 
-      - name: Verify full/demo save prompts and native load commands
+      - name: Verify guided first-time save and keyboard ownership without hardware
+        run: |
+          bash scripts/test-first-time-setup.sh
+          bash scripts/test-keyboard-state.sh
+          node --test scripts/test-keyboard.cjs
+
+      - name: Verify full-version save prompts and native load commands
         run: bash scripts/test-smilebasic-edition.sh
 
       - name: Verify Stremio account and Library fixtures without a real account

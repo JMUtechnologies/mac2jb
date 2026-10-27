@@ -1,6 +1,7 @@
 'use strict';
+const {createHash} = require('node:crypto');
 const DEFAULT_ADDON_URL = 'https://stremio.github.io/stremio-static-addon-example/manifest.json';
-const RESOURCES = new Set(['catalog', 'meta', 'stream']);
+const RESOURCES = new Set(['catalog', 'meta', 'stream', 'subtitles']);
 const clean = (value, maximum = 120) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, maximum) : '';
 
 function httpURL(value, maximum = 8192) {
@@ -87,12 +88,13 @@ function normalizeManifest(raw) {
       !Array.isArray(raw.resources) || !Array.isArray(raw.catalogs || []))
     throw Error('The addon manifest is incomplete.');
   const types = raw.types.filter(value => typeof value === 'string' && value.length > 0 && value.length <= 64).slice(0, 32);
+  const prefixes = value => Array.isArray(value) ? value
+    .filter(prefix => typeof prefix === 'string' && prefix.length <= 128).slice(0, 64) : null;
   const resources = raw.resources.slice(0, 64).flatMap(resource => {
-    if (typeof resource === 'string') return RESOURCES.has(resource) ? [{name: resource, types}] : [];
+    if (typeof resource === 'string') return RESOURCES.has(resource) ? [{name: resource, types, idPrefixes: prefixes(raw.idPrefixes)}] : [];
     if (!resource || !RESOURCES.has(resource.name)) return [];
     const allowed = Array.isArray(resource.types) ? resource.types.filter(type => types.includes(type)) : types;
-    const idPrefixes = Array.isArray(resource.idPrefixes) ? resource.idPrefixes
-      .filter(prefix => typeof prefix === 'string' && prefix.length <= 128).slice(0, 64) : null;
+    const idPrefixes = prefixes(resource.idPrefixes);
     return [{name: resource.name, types: allowed, idPrefixes}];
   });
   const catalogs = (raw.catalogs || []).slice(0, 64).flatMap(catalog => {
@@ -114,10 +116,17 @@ function normalizeMeta(raw, fallbackType) {
       episode: Number.isSafeInteger(video.episode) ? video.episode : null, released: clean(video.released, 48)}];
   }).sort((a, b) => (a.season ?? -1) - (b.season ?? -1) || (a.episode ?? -1) - (b.episode ?? -1) ||
     (Date.parse(a.released) || -8640000000000000) - (Date.parse(b.released) || -8640000000000000));
-  let poster;
+  let poster, background, logo;
   try { if (typeof raw.poster === 'string') poster = httpURL(raw.poster).href; } catch {}
+  try { if (typeof raw.background === 'string') { const url = httpURL(raw.background, 2048); if (url.href.length <= 2048) background = url.href; } } catch {}
+  try { if (typeof raw.logo === 'string') { const url = httpURL(raw.logo, 2048); if (url.href.length <= 2048) logo = url.href; } } catch {}
+  const rating = raw.imdbRating ?? raw.rating;
   const defaultVideoId = raw.behaviorHints?.defaultVideoId;
-  return {id: raw.id, type, name: clean(raw.name) || raw.id.slice(0, 80), poster,
+  return {id: raw.id, type, name: clean(raw.name) || raw.id.slice(0, 80), poster, background, logo,
+    posterShape: ['poster', 'square', 'landscape'].includes(raw.posterShape) ? raw.posterShape : 'poster',
+    genres: (Array.isArray(raw.genres) ? raw.genres : []).slice(0, 8).map(genre => clean(genre, 48)).filter(Boolean),
+    runtime: clean(raw.runtime, 48),
+    rating: typeof rating === 'string' || typeof rating === 'number' && Number.isFinite(rating) ? clean(String(rating), 16) : '',
     behaviorHints: {defaultVideoId: typeof defaultVideoId === 'string' && defaultVideoId.length <= 2048 ? defaultVideoId : undefined},
     description: clean(raw.description, 600), releaseInfo: clean(String(raw.releaseInfo || raw.year || ''), 48), videos};
 }
@@ -156,12 +165,46 @@ function normalizeStream(raw, addonName) {
   return result;
 }
 
+function normalizeSubtitle(raw, addonName, providerKey = 'subtitle') {
+  if (!raw || typeof raw.id !== 'string' || !raw.id || raw.id.length > 2048 ||
+      /[\x00-\x1f\x7f]/.test(raw.id) || typeof raw.lang !== 'string' || !clean(raw.lang, 64) || raw.lang.length > 64) return null;
+  try {
+    const lang = clean(raw.lang, 64);
+    const url = httpURL(raw.url).href;
+    if (url.length > 8192) return null;
+    let label = clean(raw.label, 160);
+    if (!label) { try { label = lang === 'und' ? 'Unknown language' : new Intl.DisplayNames(['en'], {type: 'language'}).of(lang); } catch {} }
+    return {id: `${providerKey}:${raw.id}`, remoteId: raw.id, url, lang,
+      label: clean(label, 160) || lang, addonName: clean(addonName)};
+  } catch { return null; }
+}
+
+function subtitleExtras(raw = {}) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('The subtitle request metadata is invalid.');
+  const extras = {};
+  if (raw.videoHash !== undefined) {
+    if (typeof raw.videoHash !== 'string' || !/^[a-f0-9]{16}$/i.test(raw.videoHash)) throw Error('The subtitle video hash is invalid.');
+    extras.videoHash = raw.videoHash;
+  }
+  if (raw.videoSize !== undefined) {
+    if (!Number.isSafeInteger(raw.videoSize) || raw.videoSize < 0) throw Error('The subtitle video size is invalid.');
+    extras.videoSize = raw.videoSize;
+  }
+  if (raw.filename !== undefined) {
+    if (typeof raw.filename !== 'string' || !raw.filename || raw.filename.length > 1024 || /[\x00-\x1f\x7f]/.test(raw.filename))
+      throw Error('The subtitle filename is invalid.');
+    extras.filename = raw.filename;
+  }
+  return extras;
+}
+
 class AddonClient {
   constructor(url, options = {}) { this.url = manifestURL(url); this.options = options; this.manifest = null; }
   async init() { this.manifest = normalizeManifest(await requestJSON(this.url, this.options)); return this; }
   supports(resource, type, id = '') {
+    if (typeof type !== 'string' || !type || type.length > 64 || typeof id !== 'string' || id.length > 2048) return false;
     return this.manifest?.resources.some(rule => rule.name === resource && rule.types.includes(type) &&
-      (!rule.idPrefixes || rule.idPrefixes.some(prefix => id.startsWith(prefix)))) || false;
+      (resource === 'catalog' || !rule.idPrefixes || rule.idPrefixes.some(prefix => id.startsWith(prefix)))) || false;
   }
   resourceURL(resource, type, id, extras = {}) {
     if (!RESOURCES.has(resource) || typeof type !== 'string' || typeof id !== 'string') throw Error('Invalid addon resource.');
@@ -193,6 +236,17 @@ class AddonClient {
     const data = await requestJSON(this.resourceURL('stream', type, id), this.options);
     if (!Array.isArray(data.streams)) throw Error('The addon did not return a stream list.');
     return data.streams.slice(0, 200).map(stream => normalizeStream(stream, this.manifest.name));
+  }
+  async subtitles(type, id, extra = {}) {
+    if (!id || !this.supports('subtitles', type, id)) return [];
+    const data = await requestJSON(this.resourceURL('subtitles', type, id, subtitleExtras(extra)), this.options);
+    if (!Array.isArray(data.subtitles)) throw Error('The addon did not return a subtitle list.');
+    const providerKey = 'sub_' + createHash('sha256').update(this.url.href).digest('hex').slice(0, 16);
+    const seen = new Set();
+    return data.subtitles.slice(0, 200).map(subtitle => normalizeSubtitle(subtitle, this.manifest.name, providerKey)).filter(subtitle => {
+      if (!subtitle || seen.has(subtitle.id)) return false;
+      seen.add(subtitle.id); return true;
+    });
   }
 }
 
@@ -229,7 +283,16 @@ class AddonCollection {
     if (!streams.length && results.some(result => result.status === 'rejected')) throw Error('The stream providers could not return sources. Refresh to try again.');
     return streams;
   }
+  async subtitles(type, id, extra = {}) {
+    const extras = subtitleExtras(extra);
+    const clients = this.clients.filter(client => client.supports('subtitles', type, id));
+    const results = await Promise.allSettled(clients.map(client => client.subtitles(type, id, extras)));
+    const subtitles = results.flatMap(result => result.status === 'fulfilled' ? result.value : []).slice(0, 200);
+    if (!subtitles.length && results.some(result => result.status === 'rejected'))
+      throw Error('The subtitle providers could not return subtitles. Try again.');
+    return subtitles;
+  }
 }
 
 module.exports = {DEFAULT_ADDON_URL, AddonClient, AddonCollection, requestJSON, manifestURL, normalizeMeta,
-  normalizeStream, requestHeaders, redactURL, redactText, clean};
+  normalizeStream, normalizeSubtitle, subtitleExtras, requestHeaders, redactURL, redactText, clean};

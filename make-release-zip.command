@@ -8,9 +8,11 @@ for path in \
     README.md \
     LICENSE \
     .gitignore \
+    .github \
     Makefile \
     sender.c \
     commands.c \
+    keyboard.c \
     indent-test.bas \
     upstream.lock \
     vendor/libusbd/Makefile \
@@ -46,9 +48,11 @@ for item in \
     README.md \
     LICENSE \
     .gitignore \
+    .github \
     Makefile \
     sender.c \
     commands.c \
+    keyboard.c \
     mac2jb.command \
     setup.sh \
     fetch-bootstrap.sh \
@@ -59,7 +63,6 @@ for item in \
     scripts \
     stremio \
     gui \
-    docs \
     packaging \
     drivers \
     assets \
@@ -83,12 +86,13 @@ PYTEST
 rm -rf "$TMP/mac2jb/vendor/ns2jb/runs"
 rm -rf "$TMP/mac2jb/vendor/ns2jb/dumps"
 rm -rf "$TMP/mac2jb/vendor/HBLauncher/runs" "$TMP/mac2jb/vendor/HBLauncher/tools" "$TMP/mac2jb/vendor/HBLauncher/dist"
+rm -rf "$TMP/mac2jb/vendor/GPUBrewLauncher/runs" "$TMP/mac2jb/vendor/GPUBrewLauncher/tools" "$TMP/mac2jb/vendor/GPUBrewLauncher/dist"
 
 # A source package must not include executable kernel extensions, machine-local
 # Xcode data, or the unused unlicensed upstream USB-device example.
 rm -rf "$TMP/mac2jb/vendor/macos_usb_gadget_poc/usbgadget.kext" \
        "$TMP/mac2jb/vendor/macos_usb_gadget_poc/usb_device"
-find "$TMP/mac2jb" -type d \( -name xcuserdata -o -name project.xcworkspace -o -name __pycache__ \) -prune -exec rm -rf {} +
+find "$TMP/mac2jb" -type d \( -name xcuserdata -o -name project.xcworkspace -o -name __pycache__ -o -name '*.dSYM' \) -prune -exec rm -rf {} +
 
 # Remove compiled binaries and local artifacts.
 find "$TMP/mac2jb" -type f \( \
@@ -99,8 +103,10 @@ find "$TMP/mac2jb" -type f \( \
     -name '*.dylib' -o \
     -name 'mac2jb-send' -o \
     -name 'mac2jb-commands' -o \
+    -name 'mac2jb-keyboard' -o \
     -name '*.log' -o \
-    -name '*.xcuserstate' \
+    -name '*.xcuserstate' -o \
+    -name '*.kate-swp' \
 \) -delete
 
 # Remove additional Git metadata if present.

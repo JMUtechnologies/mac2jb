@@ -18,7 +18,9 @@ async function serve(context) {
   let cycle = report.cacheAddress.bucketPeriod || 0x500000;
   check(runControl?.state.directory, 'The run must own its memory endpoint directory');
   check(activePlan.encoding === 'signed-one-shot', 'Expected the Switch 2 signed cache header');
-  const socketPath = path.join(runControl.state.directory, 'memory.sock');
+  const socketPath = process.platform === 'win32'
+    ? '\\\\.\\pipe\\ns2-' + path.basename(runControl.state.directory) + '-memory'
+    : path.join(runControl.state.directory, 'memory.sock');
   const state = report.memoryControl = {socketPath, ready: false, session: live.session,
     phase: 'bootstrap', steadyStateReliable: false, operations: []};
   for (const name of ['fs-memory-control.cjs', 'fs-root-control.cjs']) {
@@ -357,7 +359,7 @@ async function serve(context) {
   context.bootstrap = {read, writeAt, select, getPlan: () => activePlan};
   try {
     await new Promise((resolve, reject) => {server.once('error', reject); server.listen(socketPath, resolve);});
-    await fs.chmod(socketPath, 0o600);
+    await fs.chmod(socketPath, 0o600).catch(() => {});
     state.ready = true;
     await save();
     console.log(JSON.stringify({stage: 'memory-ready', socketPath, file, plan: state.plan}));
@@ -368,7 +370,7 @@ async function serve(context) {
     runControl?.events.off('stop', stop);
     state.ready = false;
     if (server.listening) server.close();
-    await fs.rm(socketPath, {force: true});
+    if (process.platform !== 'win32') await fs.rm(socketPath, {force: true});
     await save();
   }
 }

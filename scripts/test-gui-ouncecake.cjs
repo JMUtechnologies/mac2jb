@@ -80,7 +80,7 @@ test('EOF before selection releases only the attachment and never deploys native
  const f=await helperFixture(t,{onEvent(event,input){if(event.type==='catalog')input.end();}});await f.promise;
  assert.deepEqual(f.calls,['attach','catalog','attachment-close']);
 });
-test('an existing HBLauncher or Stremio attempt prevents another native attachment',async t=>{
+test('an existing launcher or Stremio attempt prevents another native attachment',async t=>{
  const f=await helperFixture(t,{existingAttempt:true});await assert.rejects(f.promise,/EEXIST/);assert.deepEqual(f.calls,[]);
  assert.equal(f.events.find(event=>event.type==='failed').cleanupBlocked,false);
 });

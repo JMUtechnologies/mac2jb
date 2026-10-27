@@ -154,7 +154,7 @@ run_hid() {
           if (( detected == 0 )); then
             echo "$candidate: USB keyboard enumerated."
             if [[ "$label" == 'Sending bootstrap' ]]; then
-              echo 'Transferring SmileBASIC bootstrap (approximately 7-10 minutes at 50 ms/key).'
+              echo 'Transferring SmileBASIC bootstrap (10 ms/key by default; wait until typing finishes).'
               echo 'Keep this Terminal window open and the Switch plugged in until transfer completes.'
             fi
           fi
@@ -188,7 +188,7 @@ run_hid() {
       if (( detected == 0 )) && grep -Eq 'Keyboard enumerated\. Sending|^Sending: ' "$attempt_log"; then
         echo "$candidate: USB keyboard enumerated."
         if [[ "$label" == 'Sending bootstrap' ]]; then
-          echo 'Transferring SmileBASIC bootstrap (approximately 7-10 minutes at 50 ms/key).'
+          echo 'Transferring SmileBASIC bootstrap (10 ms/key by default; wait until typing finishes).'
           echo 'Keep this Terminal window open and the Switch plugged in until transfer completes.'
         fi
         detected=1
@@ -247,7 +247,7 @@ if [[ "$mode" == 1 ]]; then
   echo
   echo 'Open SmileBASIC, choose Make a Program, and open an EMPTY editor on the Switch.'
   read -r -p 'Press Enter when ready... ' _
-  if ! run_hid 'Sending bootstrap' env MAC2JB_AUTO_WORKER=1 ./mac2jb-send assets/bootstrap.bas --delay-ms 50; then
+  if ! run_hid 'Sending bootstrap' env MAC2JB_AUTO_WORKER=1 ./mac2jb-send assets/bootstrap.bas --delay-ms 10; then
     echo 'Bootstrap transfer failed; post-bootstrap steps were not started.'
     exit 1
   fi
@@ -373,7 +373,7 @@ if [[ "$ready" != 1 ]]; then
 fi
 echo 'Host published current-session pairing parameters.'
 
-if ! run_hid 'Sending post-bootstrap commands' env MAC2JB_AUTO_WORKER=1 ./mac2jb-commands --auto --delay-ms 50; then
+if ! run_hid 'Sending post-bootstrap commands' env MAC2JB_AUTO_WORKER=1 ./mac2jb-commands --auto --delay-ms 10; then
   echo "HID transfer failed. Review the Switch and $log"
   read -r -p 'Press Enter to close this window... ' _ || true
   exit 1

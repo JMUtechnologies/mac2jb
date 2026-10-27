@@ -9,10 +9,32 @@ const acquisitionFile = path.join(__dirname, '../current-acquisition.json');
 const executionFile = path.join(directory, 'current-execution.json');
 const read = file => fs.readFile(file, 'utf8').then(JSON.parse);
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+// AFTER in runtime.cjs
 async function save(file, value) {
-  const temporary = file + '.' + process.pid + '.tmp';
+  const temporary = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   await fs.writeFile(temporary, JSON.stringify(value, null, 2) + '\n', {mode: 0o600});
-  await fs.rename(temporary, file);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      await fs.rename(temporary, file);
+      return;
+    } catch (err) {
+      if (['EPERM', 'EBUSY', 'EACCES', 'EEXIST'].includes(err.code) && attempt < 19) {
+        await new Promise(resolve => setTimeout(resolve, 20 + attempt * 10));
+      } else if (attempt === 19) {
+        try {
+          await fs.copyFile(temporary, file);
+          await fs.unlink(temporary).catch(() => {});
+          return;
+        } catch {
+          await fs.unlink(temporary).catch(() => {});
+          throw err;
+        }
+      } else {
+        await fs.unlink(temporary).catch(() => {});
+        throw err;
+      }
+    }
+  }
 }
 const local = (session, suffix) => path.join(directory, session + suffix);
 

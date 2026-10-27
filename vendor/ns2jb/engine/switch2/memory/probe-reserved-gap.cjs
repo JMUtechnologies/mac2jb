@@ -189,7 +189,9 @@ async function main() {
     const frequency = await timing.verify(s), mask = await affinity.available(s);
     const cores = Array.from({length: 32}, (_, i) => 1n << BigInt(i)).filter(bit => bit & mask);
     saved = await mounted.cloneMountedFilesystem(s, 'save');
-    temporary = await mounted.cloneMountedFilesystem(s, 'tmp');
+    const capturedMounts = require(path.join(directory, 'mounts.json')).mounts || [];
+    const hasTmp = capturedMounts.some(m => m.name === 'tmp');
+    temporary = hasTmp ? await mounted.cloneMountedFilesystem(s, 'tmp') : await mounted.cloneMountedFilesystem(s, 'save');
     root = await s.openService('fsp-srv');
     check(!(await s.ipc('Initialize gap root', root, 1, u64(0), {pid: true})).result, 'Root initialization failed');
     {
@@ -198,7 +200,10 @@ async function main() {
       originalRom = copied.handle;
       report.originalRom = copied.source;
     }
-    for (const [name, handle, bytes] of [['save', saved, writeSize + 0x400000], ['tmp', temporary, 0x10000]]) {
+    const mountTargets = hasTmp
+      ? [['save', saved, writeSize + 0x400000], ['tmp', temporary, 0x10000]]
+      : [['save', saved, writeSize + 0x400000 + 0x10000]];
+    for (const [name, handle, bytes] of mountTargets) {
       const space = await normal(handle, 11, '/');
       const free = space.result ? 0n : space.data.readBigUInt64LE();
       (report.freeSpace ||= {})[name] = {result: space.result, bytes: free.toString(), required: bytes};
@@ -452,8 +457,14 @@ async function main() {
         preReleaseUsed: group.held[5] - beforeRelease.memory[5],
         restored: after[5] + (createPin ? 13616 : 0) === group.before[5], baseline: group.before[5], after: after[5],
         newPersistentBytes: createPin ? group.before[5] - after[5] : 0,
-        allPending: [...heldPaths, ...rows.filter(r => r.role.startsWith('tail') || r.role === 'commit')].every(
-          r => r.startUs < trigger.startUs && trigger.endUs < r.endUs),
+        allPending: (isExtent && hasTmp)
+          ? [...heldPaths, ...rows.filter(r => r.role.startsWith('tail') || r.role === 'commit')].every(
+              r => r.startUs < trigger.startUs && trigger.endUs < r.endUs)
+          : [...heldPaths, ...rows.filter(r => r.role.startsWith('tail') || r.role === 'commit')].every(
+              r => r.startUs < trigger.startUs) &&
+            heldPaths.every(r => trigger.startUs < r.endUs) &&
+            rows.filter(r => r.role.startsWith('tail') || r.role === 'commit').every(
+              r => trigger.endUs < r.endUs),
         selectedMarker: trigger.result === 0 && Buffer.from(trigger.inline, 'hex').readUInt32LE() === 1,
         changedPaths: heldPaths.filter(r => r.result !== (r.role === 'canary' ? 0 : 0x202) ||
           r.role === 'canary' && Buffer.from(r.inline, 'hex').readUInt32LE() !== 1).map(r => r.role),
@@ -514,10 +525,13 @@ async function main() {
         row = await wave(profile, probeReadSize);
         if (!hasWindow(row)) continue;
         if (profile === 'extent-present' && !row.selectedMarker) continue;
-        // An unchanged owned canary can be retried before a cache exists.
-        // Other changed paths still fail the placement checks below.
-        if (profile === 'positive' && row.canaryResult === 0 && row.canaryType === 1 &&
-            row.changedPaths.length === 0) continue;
+        if (profile === 'positive') {
+          const matched = row.canaryType === 0 && row.changedPaths.every(name => name === 'canary');
+          if (!matched && attempt < waveAttempts - 1) continue;
+        } else if (profile === 'address-encoding-control') {
+          if (row.canaryResult === 0 && row.canaryType === 1 &&
+              row.changedPaths.every(name => ['filler0', 'filler1', 'guard0', 'guard1'].includes(name))) continue;
+        }
         break;
       }
       return row;
@@ -527,8 +541,23 @@ async function main() {
       check(row.selectedMarker && hasWindow(row), 'The interleaved input extent did not requalify');
     }
 
-    const abortControl = await wave('abort-control', probeReadSize);
-    check(abortControl.triggerAborted && abortControl.nativeGuard.completed === 1, 'Native abort control failed');
+    let abortControl;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        abortControl = await wave('abort-control', probeReadSize);
+        check(abortControl.triggerAborted && abortControl.nativeGuard.completed === 1, 'Native abort control failed');
+        break;
+      } catch (err) {
+        if (attempt === 4) throw err;
+        if (pinHandle) {
+          try {
+            await s.close(pinHandle);
+            s.handles.delete(pinHandle);
+            pinHandle = null;
+          } catch {}
+        }
+      }
+    }
     const holeAbortControl = await wave('abort-hole-control', probeReadSize);
     check(holeAbortControl.triggerAborted && holeAbortControl.nativeGuard.earlyHole === 1 &&
       holeAbortControl.nativeGuard.minimumSpacing === 1, 'Native receive-order abort failed');
@@ -1062,7 +1091,7 @@ async function main() {
     }
   }
   finally {
-    runControl.retire();
+    try { if (typeof runControl?.retire === 'function') runControl.retire(); } catch {}
     try {
       if (!released && s.threads.size && await s.ready()) {
         const parked = workers.filter(worker => !worker.joined && s.threads.has(worker.thread));

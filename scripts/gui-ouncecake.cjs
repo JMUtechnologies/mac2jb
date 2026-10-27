@@ -110,7 +110,7 @@ async function main(args=process.argv.slice(2),options={}){
   isLive=options.isLive||(()=>{try{const value=JSON.parse(sync.readFileSync(path.join(run.directory,'result.json'),'utf8'));return value.verified===true&&value.rpc?.mode==='held'&&value.rpc?.state==='listening'&&!value.error;}catch{return false;}});
   check(isLive(),'The original held session is no longer live.');
   const marker=JSON.stringify({application:'OunceCake',started:report.started});
-  // Share the existing one-application marker with HBLauncher and Stremio.
+  // Share the existing one-application marker with the GPU launcher and Stremio.
   await fs.writeFile(path.join(run.directory,'.mac2jb-hblauncher-attempt.json'),marker,{flag:'wx',mode:0o600});
   await fs.writeFile(path.join(run.directory,'.mac2jb-ouncecake-attempt.json'),marker,{flag:'wx',mode:0o600});
   const modules=options.modules||Object.fromEntries(['session','content','mounts','ftp'].map(name=>[name,require(path.join(snapshot.vendor,'engine',name+'.cjs'))]));

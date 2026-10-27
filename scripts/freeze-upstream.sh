@@ -18,7 +18,7 @@ printf '# Frozen upstream revisions (only changed by maintainer)\n' > upstream.l
 for spec in \
   'libusbd|https://github.com/shinyquagsire23/libusbd.git' \
   'macos_usb_gadget_poc|https://github.com/shinyquagsire23/macos_usb_gadget_poc.git' \
-  'ns2jb|https://gitlab.com/kurumuz/ns2jb.git'; do
+  'ns2jb|https://gitlab.com/BermTheSequel/ns2jb2.git'; do
   name="${spec%%|*}"; url="${spec#*|}"
   echo "Fetching $name snapshot..."
   git clone --depth 1 "$url" "$work/$name"

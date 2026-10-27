@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Attach the unchanged HBLauncher stages to an already verified held session.
+// GPU launcher runtimes attached to an already verified held session.
 process.umask(0o077);
 const fs = require('node:fs/promises');
 const sync = require('node:fs');
@@ -18,14 +18,19 @@ const stages = [
   ['homebrew-launcher/launcher-check.cjs','auto']
 ];
 const owners = [
-  {role:'graphics', script:'homebrew-launcher/launcher-loop.cjs', args:['auto'], ready:'HBLauncher game event source ready.'},
+  {role:'graphics', script:'homebrew-launcher/launcher-loop.cjs', args:['auto'], ready:'GPUBrewLauncher game event source ready.'},
   {role:'ftp', script:'sdk/host/ftp-service.cjs', args:[], ready:'SDK FTP service ready.'},
   {role:'audio', script:'homebrew-launcher/game-audio.cjs', args:[], ready:'Game sound effects ready.'}
 ];
-function applicationConfig(application='hblauncher') {
-  if(application==='hblauncher')return {id:application,vendor:'HBLauncher',name:'HBLauncher v0.2.0',version:'0.2.0',
-    source:{commit:'b40723be04baa51e5d1f121a1e2242c4167b6cbc'},owners};
-  throw Error('Unknown homebrew application: '+application);
+function applicationConfig(application='gpubrewlauncher') {
+  if(application==='hblauncher')return {id:application,vendor:'HBLauncher',name:'HBLauncher',
+    version:'0.2.0',source:{tag:'v0.2.0',commit:'b40723be04baa51e5d1f121a1e2242c4167b6cbc'},
+    owners:owners.map(owner=>owner.role==='graphics'?{...owner,ready:'HBLauncher game event source ready.'}:owner),
+    frameReady:'HBLauncher continuous native frame loop running.'};
+  if(application!=='gpubrewlauncher')throw Error('Unknown homebrew application: '+application);
+  return {id:application,vendor:'GPUBrewLauncher',name:'GPUBrewLauncher',
+    version:'snapshot-f35ff64',source:{commit:'f35ff64ea4b9b42cf2a75095d24662fe250f03e4'},owners,
+    frameReady:'GPUBrewLauncher continuous native frame loop running.'};
 }
 const check = (value, message) => {if (!value) throw Error(message);};
 async function privatePath(file, directory = false) {
@@ -41,8 +46,11 @@ function writeJSON(file, value, exclusive = false) {
 }
 async function validateRun(root, candidate, verifySession) {
   const directory = await privatePath(candidate,true);
-  const runs = await fs.realpath(path.join(root,'vendor/ns2jb/runs'));
-  check(path.dirname(directory) === runs, 'HBLauncher must attach to this app’s current held run.');
+  const runs = await fs.realpath(path.join(root,'vendor/ns2jb/runs')).catch(error=>{
+    if(error.code==='ENOENT')return null;throw error;
+  });
+  if(path.dirname(directory)!==runs)
+    await require('./rpc-attachment.cjs').validateManifest(root,directory);
   const proof = await verifySession(directory);
   const connection = await json(path.join(directory,'connection.json'));
   check(proof.root === directory && proof.session === path.basename(directory) &&
@@ -67,7 +75,7 @@ function proxyHandler({token, request, live = () => true}) {
       }
       const body=JSON.parse(Buffer.concat(parts));
       check(body && typeof body==='object' && !Array.isArray(body) && commands.has(body.command),
-        'Unknown HBLauncher bridge command');
+        'Unknown homebrew bridge command');
       const reply=await request(body); // The original bridge serializes all native operations.
       if (!res.destroyed) {
         res.setHeader('content-type','application/json');
@@ -86,7 +94,7 @@ async function serveProxy(options) {
     server.closeAllConnections();await new Promise(resolve=>server.close(resolve));
   }};
 }
-function runtimeEnvironment(root, inherited = process.env, application='hblauncher') {
+function runtimeEnvironment(root, inherited = process.env, application='gpubrewlauncher') {
   const selected=applicationConfig(application);
   const env={...inherited,
     PATH:[path.join(root,'homebrew/python/bin'),path.join(root,'homebrew/bin'),inherited.PATH||''].join(path.delimiter),
@@ -155,17 +163,18 @@ async function main(args = process.argv.slice(2), options = {}) {
     }catch{return false;}
   }
   function start(script,extra=[],readyText,role='prepare'){
-    check(!stopping,'HBLauncher launch was stopped.');
+    check(!stopping,selected.name+' launch was stopped.');
     const child=spawn(process.execPath,[path.join(vendor,script),directory,...extra],{
       cwd:vendor,env:runtimeEnvironment(root,process.env,selected.id),stdio:['ignore','pipe','pipe']
     });
-    const state={child,script,role,closed:false,ready:false,output:''};children.add(state);
+    const state={child,script,role,closed:false,ready:false,frameReady:false,output:''};children.add(state);
     let readyResolve,readyReject;
     state.readiness=new Promise((resolve,reject)=>{readyResolve=resolve;readyReject=reject;});
     state.readiness.catch(()=>{});
     const observe=line=>{
       state.output=(state.output+line+'\n').slice(-32768);
       if(readyText && line.trim()===readyText){state.ready=true;readyResolve();}
+      if(line.trim()===selected.frameReady)state.frameReady=true;
       safeEmit('progress',{message:script+': '+line});
     };
     lines(child.stdout,observe);lines(child.stderr,observe);
@@ -182,7 +191,7 @@ async function main(args = process.argv.slice(2), options = {}) {
   }
   async function wait(promise,label){
     let timer;
-    try{return await Promise.race([promise,stopRequested.then(()=>{throw Error('HBLauncher stopped during '+label);}),
+    try{return await Promise.race([promise,stopRequested.then(()=>{throw Error(selected.name+' stopped during '+label);}),
       new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(label+' timed out.')),options.startTimeoutMs||300000);})]);}
     finally{clearTimeout(timer);}
   }
@@ -194,7 +203,7 @@ async function main(args = process.argv.slice(2), options = {}) {
       timer=setTimeout(()=>{timedOut=true;state.child.kill('SIGKILL');resolve({code:null});},options.stopTimeoutMs||90000);
     })]);clearTimeout(timer);
     if(timedOut||outcome.error||outcome.code!==0)
-      failure ||= Error('HBLauncher '+state.role+' did not confirm a clean stop. Restart the console.');
+      failure ||= Error(selected.name+' '+state.role+' did not confirm a clean stop. Restart the console.');
     if(timedOut)await state.done;
   }
   let graphics;const activeOwners=new Map();
@@ -211,7 +220,7 @@ async function main(args = process.argv.slice(2), options = {}) {
     for(const [script,...extra]of stages){
       safeEmit('progress',{message:'Preparing '+script});
       const state=start(script,extra);const outcome=await wait(state.done,script);
-      check(!outcome.error&&outcome.code===0&&!outcome.signal,'HBLauncher preparation failed: '+script);
+      check(!outcome.error&&outcome.code===0&&!outcome.signal,selected.name+' preparation failed: '+script);
       report.stages.push({script,completed:new Date().toISOString()});await save();
     }
     for(const owner of selected.owners){
@@ -220,7 +229,7 @@ async function main(args = process.argv.slice(2), options = {}) {
       await wait(state.readiness,owner.role+' readiness');report.children.push({role:owner.role,script:owner.script});await save();
     }
     // This second marker proves the console frame worker actually started.
-    await wait((async()=>{while(!graphics.output.includes('HBLauncher continuous native frame loop running.')){
+    await wait((async()=>{while(!graphics.frameReady){
       check(!graphics.closed,'The graphics worker ended before its frame loop started.');
       await new Promise(resolve=>setTimeout(resolve,20));
     }})(),'console graphics readiness');
@@ -240,7 +249,7 @@ async function main(args = process.argv.slice(2), options = {}) {
         const sound=await json(path.join(directory,'game-audio.json'));
         check(loop.session===report.session&&loop.completed&&!loop.error&&loop.threadRunning===false&&
           sound.session===report.session&&sound.completed&&!sound.error&&!sound.stopError,
-        'HBLauncher did not verify its graphics and audio shutdown.');
+        selected.name+' did not verify its graphics and audio shutdown.');
         report.shutdown={graphics:{completed:loop.completed,threadRunning:loop.threadRunning},
           audio:{completed:sound.completed}};
       }catch(error){failure ||= error;}

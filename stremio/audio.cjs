@@ -1,8 +1,8 @@
 'use strict';
 // Continuous PCM owner using only the SDK routines already qualified by HBL.
 const fs=require('node:fs/promises'),path=require('node:path');
-const symbols=require('../vendor/HBLauncher/homebrew-launcher/audio-symbols.json');
-const sdkImage=require('../vendor/HBLauncher/smilebasic/reference/sdk-checks.cjs');
+const symbols=require('../vendor/GPUBrewLauncher/homebrew-launcher/audio-symbols.json');
+const sdkImage=require('../vendor/GPUBrewLauncher/smilebasic/reference/sdk-checks.cjs');
 const RATE=48000,CHANNELS=2,FRAME_BYTES=4,CHUNK_BYTES=19200,SLOTS=8,STRIDE=32768;
 const names=['InitializeAudioOutParameter','OpenDefaultAudioOutEPNS0_8AudioOutER',
   'GetAudioOutSampleRate','GetAudioOutChannelCount','GetAudioOutSampleFormat',

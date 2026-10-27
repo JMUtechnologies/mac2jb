@@ -1,10 +1,10 @@
-# mac2jb 0.4.2 packaging
+# mac2jb 0.5.0 packaging
 
 This release replaces the bundled ns2jb runtime with the complete
-`kurumuz/ns2jb` snapshot at `eb2bdec8f3907c5830eb01fb9d55797af7403579`.
+`BermTheSequel/ns2jb2` snapshot at `84619429e937c132e27a6d576892515ea0018d86`.
 It includes the changes from v0.3.2 and the subsequent stage-specific recovery
 guidance on the main branch. The stable app identity and updater are retained.
-See `docs/HOMEBREW.md` for setup and adding compatible apps.
+See the [README](../README.md#homebrew) for setup and adding compatible apps.
 
 The driver installer records SIP status for diagnostics instead of requiring
 an exact fully-disabled summary. macOS enforces filesystem and kernel-extension
@@ -12,28 +12,51 @@ load policy; failed load requests retain the actual error and exit status.
 Compatible custom configurations are not rejected by the installer. Neither
 the installer nor GUI changes SIP, AMFI, or startup security.
 
-The GUI provides a remembered SmileBASIC demo checkbox. The program text sent
-as bootstrap is unchanged; after typing, demo users manually save it with
-PRGEDIT 0 and SAVEV "TXT:NS2", PRGGET$(). Demo exploit runs restore that text
-with PRGEDIT 0:LOADV "TXT:NS2" OUT C$:PRGSET C$ instead of the full game's LOAD
-command and confirmation Enter. The edition is captured when the run starts.
+This build supports SmileBASIC 4.4.9 full version or 4.4.6 demo only. Demo setup, save helpers
+and command-line modes now use the selected edition; demo support needs console testing.
+There is no confirmed successful demo run. The bundled bootstrap is replaced with the exact pinned fork version.
+First-time setup shows the selected edition’s SAVE or SAVEV command. Later runs use
+full-version LOAD with confirmation or demo LOADV without an extra confirmation.
 Only the bootstrap text is saved; no exploit or live connection persists.
 
-The start screen separates bootstrap typing from three saved-NS2 session modes:
-exploit only, held RPC, and system-code capture. Each session mode runs a fresh
-NS2 workflow. Held RPC and code capture use the separate post-run adapter only
+The main Jailbreak button starts a fresh held RPC session; first-time setup
+is separate. Developer Options contains exploit-only, system-code capture and
+focused keyboard forwarding. Keyboard input is exclusive with payload sessions,
+uses bounded HID reports, is never logged, and releases keys on focus loss,
+stop or input closure. Held RPC and code capture use the separate post-run adapter only
 after 4/4 verifies and original FS instructions are restored. Capture uses the
 fork's unchanged module against the same live session. Each capture has a new
 private output folder. Finishing waits for the fork's own cleanup and a fully
 verified final report.
 
-This build also bundles HBLauncher v0.2.0 at
-`b40723be04baa51e5d1f121a1e2242c4167b6cbc`, including its apps, SDK, compiled
-assets, and retained notices. The separate mac2jb adapter connects the launcher
-to an already verified held RPC session; it does not use the Pico keyboard
-workflow or replace the five-argument bootstrap. Keep the host and SmileBASIC
-open while using it. A stopped GPU launcher is not a guarantee that every
-retained allocation was released; restart the console before a fresh session.
+This build bundles GPUBrewLauncher at
+`f35ff64ea4b9b42cf2a75095d24662fe250f03e4`, including its apps, SDK, compiled
+assets, and retained notices. The exact published ftpd-sb v0.1.0 package is
+added to its runtime app library. The separate mac2jb adapter connects the
+launcher to an already verified held RPC session; it does not use the Pico
+keyboard workflow or replace the five-argument bootstrap. Keep the host and
+SmileBASIC open while using it. A stopped GPU launcher is not a guarantee that
+every retained allocation was released; restart the console before a fresh
+session. The frozen HBLauncher v0.2.0 snapshot at
+`b40723be04baa51e5d1f121a1e2242c4167b6cbc` is also available as a separate
+launcher choice, using its own bundled apps and SDK through the same held-session
+adapter. The ftpd-sb overlay is included in both runtime app libraries. Stremio
+continues to use the shared SDK files from GPUBrewLauncher.
+
+The separate IZlauncher option includes the complete unchanged IZ2S Platform
+0.16.0-rc.3 source snapshot at `907de0d9f5a4e358079306e7f04a8c43d463142a`.
+`packaging/IZ2S-Platform-SHA256SUMS` records every upstream file. A generated
+private runtime enables only the base shell and File Exchange 1.1.1 for this
+Mac release, with portable font selection and the existing held RPC adapter.
+It retains prebuilt upstream shaders and all source and license notices. It
+does not provide the upstream Linux desktop/HID workflow or streaming modules.
+The upstream GPL-2.0-or-later declaration applies to independently authored
+IZMYSH code; original component terms and prior grants remain applicable.
+Upstream `THIRD_PARTY.json` explicitly marks inherited-source licensing review
+as incomplete. Neither this package nor mac2jb's MIT license claims to clear or
+relicense that material. The bundled corresponding source and runtime preparation
+script document this local adaptation. Offline tests do not establish console
+hardware compatibility.
 
 The experimental Stremio-compatible player is separate original mac2jb
 integration code. It requests the public Stremio addon protocol from Node and
@@ -47,8 +70,8 @@ Mac's Keychain and is not sent to the Node player or console. Account sync is
 covered by fixtures and still needs live testing. BC1 video targets 320×180 at
 15 fps, with continuous 48 kHz stereo PCM through a new native audio adapter.
 The maintainer confirmed Stremio startup and playback in the final test build;
-live account synchronization still needs separate confirmation. See
-`docs/STREMIO-EXPERIMENTAL.md` for setup, controls and validation limits.
+live account synchronization still needs separate confirmation. See the
+[README](../README.md#homebrew) for the available homebrew options.
 
 USB helper diagnostics distinguish unexpected signal termination from ordinary
 initialization failures and expected enumeration timeouts. A helper crash is
@@ -98,24 +121,31 @@ The root MIT license applies to mac2jb; it does not relicense third-party code.
   license texts remain included. The separately documented local prebuilt is
   under `drivers/`; the old upstream prebuilt is not used.
 - ns2jb: original work by pepsipu, with compatibility/recovery changes from
-  [kurumuz](https://gitlab.com/kurumuz/ns2jb). The fork's source, runtime, and tests
+  [BermTheSequel/ns2jb2](https://gitlab.com/BermTheSequel/ns2jb2). The fork's source, runtime, and tests
   are preserved. Its stale/incomplete integrity manifest is regenerated; the
-  original is retained in `packaging/ns2jb-eb2bdec-SHA256SUMS.upstream`.
+  original is retained in `packaging/ns2jb-8461942-SHA256SUMS.upstream`.
   The transferred bootstrap is byte for byte the fork's five-argument version.
   `scripts/prepare-bootstrap.cjs` copies and verifies that exact asset. The
   wrappers and senders use its five-argument START interface. No new license
   is asserted; retained upstream notices and third-party terms remain applicable.
   GUI orchestration is separate from the vendor source.
 - HBLauncher: [RavensClawX](https://github.com/ravensclawx/HBLauncher), v0.2.0
-  at `b40723be04baa51e5d1f121a1e2242c4167b6cbc`. Its source, apps, compiled
-  assets, SDK, and included notices are retained. The root mac2jb license does
+  at `b40723be04baa51e5d1f121a1e2242c4167b6cbc`. Its frozen source, apps, compiled
+  assets, SDK, and included notices are retained in the source archive and app runtime. The root mac2jb license does
   not relicense this material; the integration adapter is separate.
+- GPUBrewLauncher: [NiftyNova](https://github.com/NiftyNova/GPUBrewLauncher),
+  source snapshot `f35ff64ea4b9b42cf2a75095d24662fe250f03e4`, is the bundled
+  GPU app launcher derived from HBLauncher. The source, prebuilt shaders, apps,
+  CREDITS and third-party notices are retained under `vendor/GPUBrewLauncher`.
+  No tagged release or blanket project license is asserted. The root mac2jb
+  license does not relicense it. The adapter uses the existing held connection;
+  its separate host and nine-argument bootstrap are not started or transmitted.
 - ftpd-sb: [RavensClawX](https://github.com/ravensclawx/ftpd-sb), v0.1.0
   at `ab2123cfb97d492264bf6609cb410e285d6d9b5f`. The exact published release
   package is retained under `assets/homebrew-apps/ftpd-sb/`, including source,
   compiled shaders, assets, README, and credits. A runtime overlay adds it to
-  HBLauncher's app library without modifying the frozen launcher snapshot or
-  its integrity manifest. Release digests and per-file checksums are recorded
+  both launchers' app libraries without modifying either frozen source snapshot or
+  integrity manifest. Release digests and per-file checksums are recorded
   under `packaging/ftpd-sb-v0.1.0-*`. Its README states that no blanket license
   has been assigned; third-party terms remain applicable. The mac2jb root
   license does not relicense this package.
@@ -134,7 +164,7 @@ The root MIT license applies to mac2jb; it does not relicense third-party code.
   The app uses the arm64 slice of the locally installed official
   Node distribution, whose linked libraries must all be supplied by macOS.
 
-HBLauncher companion tools are bundled for offline use: Python 3.13.17
+GPU launcher companion tools are bundled for offline use: Python 3.13.17
 from the standalone 20261021 distribution, Pillow 13.0.0,
 SPIRV-Tools 2026.4, and DejaVu Sans 2.37. Their upstream licenses and
 third-party notices are retained with the packaged runtime. The mac2jb root MIT

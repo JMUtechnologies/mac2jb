@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const {spawn, spawnSync} = require('node:child_process');
+const {createHash} = require('node:crypto');
 
 test('native bootstrap line progress follows actual sender operations without USB hardware', async t => {
   const root = path.resolve(__dirname, '..');
@@ -18,6 +19,8 @@ test('native bootstrap line progress follows actual sender operations without US
     #include <stdlib.h>
     static int mock_usb_write(libusbd_ctx_t*, uint8_t, uint64_t, const void*, uint32_t, uint64_t);
     static int mock_sleep(const struct timespec*, struct timespec*);
+    static int mock_clock_gettime(clockid_t, struct timespec*);
+    static long long mock_nanoseconds=1000000000LL;
     #define libusbd_init(ctx) (*(ctx)=(libusbd_ctx_t*)1,0)
     #define libusbd_free(...) (0)
     #define libusbd_set_pid(...) (0)
@@ -39,6 +42,7 @@ test('native bootstrap line progress follows actual sender operations without US
     #define libusbd_iface_finalize(...) (0)
     #define libusbd_ep_write mock_usb_write
     #define nanosleep mock_sleep
+    #define clock_gettime mock_clock_gettime
     #define main mac2jb_sender_entry
     #include ${JSON.stringify(path.join(root, 'sender.c'))}
     #undef main
@@ -51,26 +55,38 @@ test('native bootstrap line progress follows actual sender operations without US
         if(getchar()==EOF) return LIBUSBD_NOT_ENUMERATED;
       }
       const uint8_t *bytes=data;
-      int result=calls==setting("TEST_FAIL_AT") ? LIBUSBD_NOT_ENUMERATED : (int)len;
+      mock_nanoseconds+=(long long)setting("TEST_USB_DELAY_MS")*1000000LL;
+      int result=calls==setting("TEST_FAIL_AT") ? LIBUSBD_NOT_ENUMERATED :
+        calls==setting("TEST_TIMEOUT_AT") ? LIBUSBD_TIMEOUT : (int)len;
       printf("TEST_USB {\\"call\\":%d,\\"key\\":%u,\\"mods\\":%u,\\"result\\":%d}\\n",
              calls,bytes[2],bytes[0],result); fflush(stdout);
       return result;
     }
     static int mock_sleep(const struct timespec *duration, struct timespec *remaining) {
       static int calls=0; calls++;
+      mock_nanoseconds+=(long long)duration->tv_sec*1000000000LL+duration->tv_nsec;
       printf("TEST_WAIT {\\"call\\":%d,\\"seconds\\":%ld,\\"nanoseconds\\":%ld}\\n",
              calls,duration->tv_sec,duration->tv_nsec); fflush(stdout);
       if(calls==setting("TEST_CANCEL_AT_WAIT")) raise(SIGTERM);
       return 0;
     }
-    int main(int argc,char **argv) { return mac2jb_sender_entry(argc,argv); }
+    static int mock_clock_gettime(clockid_t clock, struct timespec *destination) {
+      destination->tv_sec=mock_nanoseconds/1000000000LL;
+      destination->tv_nsec=mock_nanoseconds%1000000000LL;
+      return 0;
+    }
+    int main(int argc,char **argv) {
+      int result=mac2jb_sender_entry(argc,argv);
+      printf("TEST_PLAN {\\"planned\\":%zu,\\"sent\\":%zu}\\n",strokes_planned,strokes_sent);
+      return result;
+    }
   `;
   const input = path.join(temporary, 'sender-test.c');
   fs.writeFileSync(input, harness);
   const executables = {};
   for (const mode of ['gui', 'cli']) {
     const executable = path.join(temporary, 'sender-' + mode);
-    const compiled = spawnSync('xcrun', ['clang', '-std=c11', '-D_POSIX_C_SOURCE=200809L',
+    const compiled = spawnSync(process.platform === 'darwin' ? 'xcrun' : 'cc', [...(process.platform === 'darwin' ? ['clang'] : []), '-std=c11', '-D_POSIX_C_SOURCE=200809L',
       ...(mode === 'gui' ? ['-DMAC2JB_GUI=1'] : []),
       '-I' + path.join(root, 'vendor/libusbd/include'), input, '-o', executable], {encoding: 'utf8'});
     assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
@@ -83,16 +99,20 @@ test('native bootstrap line progress follows actual sender operations without US
     return name;
   }
   const environment = extra => ({...process.env, MAC2JB_AUTO_WORKER: '1', ...extra});
-  function trace(output) {
+  // Most progress-order assertions omit ETA; timing tests use the controlled clock.
+  function trace(output, eta = false) {
     return output.split('\n').flatMap(line => {
-      for (const [prefix, type] of [['MAC2JB_GUI ', 'progress'], ['TEST_USB ', 'usb'], ['TEST_WAIT ', 'wait']])
-        if (line.startsWith(prefix)) return [{type, ...JSON.parse(line.slice(prefix.length))}];
+      for (const [prefix, type] of [['MAC2JB_GUI ', 'progress'], ['TEST_USB ', 'usb'], ['TEST_WAIT ', 'wait'], ['TEST_PLAN ', 'plan']])
+        if (line.startsWith(prefix)) {
+          const {remainingMs, ...row} = {type, ...JSON.parse(line.slice(prefix.length))};
+          return [eta && remainingMs !== undefined ? {...row, remainingMs} : row];
+        }
       return [];
     });
   }
   const progress = records => records.filter(row => ['line-start', 'line-complete'].includes(row.type));
-  function run(text, settings = {}, mode = 'gui') {
-    const result = spawnSync(executables[mode], [file(text), '--delay-ms', '50'], {
+  function run(text, settings = {}, mode = 'gui', delay = 50) {
+    const result = spawnSync(executables[mode], [file(text), '--delay-ms', String(delay)], {
       env: environment(settings), encoding: 'utf8', timeout: 3000
     });
     return {...result, records: trace(result.stdout)};
@@ -186,6 +206,59 @@ test('native bootstrap line progress follows actual sender operations without US
     assert.deepEqual(progress(crlf.records), expected(2));
     assert.deepEqual(crlf.records, lf.records);
     assert.equal(crlf.records.filter(row => row.type === 'usb' && row.key === 40).length, 2);
+  });
+
+  await t.test('the stroke plan matches what was sent, including indent changes', () => {
+    const result = spawnSync(executables.gui, [file('A\n  B\n    C\r\nD\n '), '--delay-ms', '50'], {
+      env: environment({}), encoding: 'utf8', timeout: 3000
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const lines = trace(result.stdout, true).filter(row => ['line-start', 'line-complete'].includes(row.type));
+    assert.equal('remainingMs' in lines[0], false);
+    assert.ok(lines.slice(1).every(row => Number.isFinite(row.remainingMs) && row.remainingMs >= 0));
+    assert.equal(lines.at(-1).remainingMs, 0); // off by any stroke -> not 0
+    assert.deepEqual(trace(result.stdout).find(row => row.type === 'plan'), {type: 'plan', planned: 17, sent: 17});
+    assert.equal(trace(result.stdout).filter(row => row.type === 'usb' && row.key && row.result >= 0).length, 17);
+    assert.deepEqual(lines.filter(row => row.type === 'line-complete').map(row => row.remainingMs), [750,550,350,50,0]);
+  });
+
+  await t.test('known stroke totals cover empty lines, inherited spaces, tabs, CRLF and final unterminated text', () => {
+    for (const [text, count] of [['',0], ['\n\n',2], ['  A\n  ',4], ['  A\nB',7],
+      ['\tA\r\n\n B',6], [' A\n   B\n C',10]]) {
+      const result = run(text);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(result.records.find(row => row.type === 'plan'), {type: 'plan', planned: count, sent: count}, JSON.stringify(text));
+      assert.equal(result.records.filter(row => row.type === 'usb' && row.key && row.result >= 0).length, count, JSON.stringify(text));
+    }
+  });
+
+  await t.test('ETA measures configured pacing and USB latency without enumeration time', () => {
+    for (const [delay, expected] of [[50,120], [200,420]]) {
+      const result = run('A\nB\n', {TEST_USB_DELAY_MS:'5'}, 'gui', delay);
+      assert.equal(result.status, 0, result.stderr);
+      const events = trace(result.stdout, true).filter(row => ['line-start','line-complete'].includes(row.type));
+      assert.equal('remainingMs' in events[0], false);
+      assert.equal(events[1].remainingMs, expected);
+      assert.equal(events[2].remainingMs, expected);
+      assert.equal(events.at(-1).remainingMs, 0);
+    }
+  });
+
+  await t.test('a retried USB timeout contributes latency but does not add a completed stroke', () => {
+    const result = run('A\nB\nC\nD\n', {TEST_USB_DELAY_MS:'5', TEST_TIMEOUT_AT:'2'});
+    assert.equal(result.status, 0, result.stderr);
+    const complete = trace(result.stdout, true).filter(row => row.type === 'line-complete');
+    assert.deepEqual(complete.map(row => row.remainingMs), [375,245,122,0]);
+    assert.deepEqual(result.records.find(row => row.type === 'plan'), {type:'plan', planned:8, sent:8});
+    assert.equal(result.records.filter(row => row.type === 'usb' && row.result < 0).length, 1);
+    assert.equal(result.records.filter(row => row.type === 'usb' && row.key && row.result >= 0).length, 8);
+    assert.match(result.stdout, /retries 1/);
+  });
+
+  await t.test('the bundled five-argument bootstrap remains the exact fork source', () => {
+    const bundled = fs.readFileSync(path.join(root, 'assets/bootstrap.bas'));
+    assert.equal(createHash('sha256').update(bundled).digest('hex'), '5a2b86da8787318652365b2e4cf710f67ce618d6c21087dfc78716533a510d32');
+    assert.deepEqual(bundled, fs.readFileSync(path.join(root, 'vendor/ns2jb/bootstrap.bas')));
   });
 
   await t.test('an empty file has zero line events', () => {

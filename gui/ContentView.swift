@@ -1,103 +1,135 @@
 import SwiftUI
 import AppKit
 
-private let ink = Color(red: 0.08, green: 0.15, blue: 0.18)
-private let teal = Color(red: 0.00, green: 0.48, blue: 0.43)
-private let mist = Color(red: 0.95, green: 0.97, blue: 0.96)
+private let ink = Mac2jbTheme.ink
+private let teal = Mac2jbTheme.mint
+
+private struct ToolsContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
 
 struct ContentView: View {
     @ObservedObject var model: SessionModel
     @ObservedObject var updater: AppUpdater
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var account = StremioAccount()
     @State private var readyConfirmed = false
+    @State private var setupReady = false
+    @State private var developerReady = false
+    @State private var hostOnlyKeepRPC = false
+    @State private var commandsToSend: Set<PostBootstrapCommand> = [.load, .run, .remove]
     @State private var savedConfirmed = false
-    @State private var showLogs = false
+    @State private var saveDirectModeReady = false
+    @State private var showFirstTimeSetup = false
+    @State private var showDeveloperOptions = false
+    @State private var toolsContentHeight: CGFloat = 0
+    @State private var followConsole = true
     @State private var activityTab = 0
     @State private var driverMessage: String?
     @State private var confirmUpdate = false
     @State private var showFailure = false
     @State private var failureText = ""
     @State private var showUpdateFailure = false
-    private var canConfigure: Bool {
-        [.ready, .failed, .cancelled].contains(model.phase)
+
+    private var canConfigure: Bool { [.ready, .failed, .cancelled].contains(model.phase) }
+    private var configurationLocked: Bool { model.hasLiveWorkers || model.driverSetupRunning || !canConfigure }
+    private var showHostOnlyHomebrew: Bool {
+        hostOnlyKeepRPC && (canConfigure || model.activeRunMode == .hostOnlyHeld)
     }
+    private var driverSetupBlocked: Bool { model.runtime == nil || configurationLocked || updater.blocksNewSession }
     private var timingSettingsValid: Bool {
         (1...2000).contains(model.keyDelayMs) && (1...120).contains(model.enumerationTimeoutSeconds) &&
         [model.effectiveLoadConfirmWaitMs, model.loadWaitMs, model.runWaitMs, model.removeWaitMs]
             .allSatisfy { (0...120000).contains($0) }
     }
+    private var startBlocked: Bool {
+        model.runtime == nil || !model.driverLoaded || !timingSettingsValid || configurationLocked || updater.blocksNewSession
+    }
     private var headline: String {
         switch model.phase {
         case .preparing: return "Getting everything ready."
-        case .ready: return "Get started"
+        case .ready: return "Jailbreak your Switch."
         case .bootstrap: return "Your Mac is doing the typing."
-        case .awaitingSave: return "Save the bootstrap on your Switch."
-        case .hostStarting: return "Starting a fresh session."
-        case .commands: return "Sending post-bootstrap commands."
-        case .waitingForConsole: return "Following the console session."
-        case .rpcHeld: return "Your RPC session is open."
+        case .awaitingSave: return "One more step on your Switch."
+        case .savingBootstrap: return model.status
+        case .hostStarting: return model.hostIsExploiting ? "Jailbreaking…" : "Starting ns2jb host…"
+        case .rpcAttaching: return "Connecting to open RPC…"
+        case .rpcDetached: return "Disconnected."
+        case .waitingForConsole:
+            return model.hostIsExploiting ? "Jailbreaking…" : model.activeRunMode.isHostOnly ? "Waiting for your console commands." : "Waiting for the Switch to respond."
+        case .commands: return model.status
+        case .commandsSent: return model.keyboardIsLoading ? "Loading…" : "Commands sent."
+        case .rpcHeld: return "You’re ready to go."
         case .dumpingFirmware: return "Saving system code."
-        case .rpcFinishing: return "Finishing the session."
-        case .launchingHomebrew: return model.postRun.homebrewStage == .selecting ? "Choose a game." : "Starting \(model.homebrewTitle)."
+        case .rpcFinishing: return "Finishing up safely."
+        case .launchingHomebrew: return model.postRun.homebrewStage == .selecting ? "Choose a game." : "Opening \(model.homebrewTitle)."
         case .homebrewRunning: return "\(model.homebrewTitle) is running."
-        case .homebrewStopped: return model.postRun.cleanupBlocked ? "Restart the console." : "Finish the homebrew session."
-        case .verified: return "FS execution verified."
+        case .homebrewStopped: return model.postRun.cleanupBlocked ? "Restart your Switch." : "Ready to finish."
+        case .keyboardConnecting: return "Loading…"
+        case .keyboardForwarding: return "Your Mac is the keyboard."
+        case .verified: return "All done."
         case .failed: return "Let’s check what happened."
         case .cancelled: return "Session stopped."
         }
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    header
-                    if updater.state != .idle { updateStatus }
-                    if canConfigure { setup }
-                    else { activeSession }
-                    activity
-                    footer
+        ZStack {
+            Mac2jbBackdrop()
+            GeometryReader { viewport in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 16) {
+                            if updater.state != .idle { updateStatus }
+                            if canConfigure { home } else { activeSession }
+                            toolsBubble
+                            Text("mac2jb · v\(AppBuildIdentity.version)")
+                                .font(.system(size: 10)).foregroundStyle(Mac2jbTheme.muted)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxWidth: 820).padding(.horizontal, 30).padding(.vertical, 24)
+                        .frame(maxWidth: .infinity, minHeight: viewport.size.height)
+                    }
+                    .onChange(of: model.phase) { _, _ in scrollToKeyboardIfNeeded(proxy) }
+                    .onChange(of: toolsContentHeight) { _, _ in scrollToKeyboardIfNeeded(proxy) }
                 }
-                .padding(34)
-            }
-            .background(mist)
+            }.ignoresSafeArea(.container, edges: .top)
         }
-        .frame(minWidth: 1020, minHeight: 740)
-        .preferredColorScheme(.light)
-        .tint(teal)
+        .frame(minWidth: 760, minHeight: 560)
+        .preferredColorScheme(.dark).tint(teal)
         .onAppear {
             model.accountProgressHandler = { [weak account] update in account?.handleProgress(update) }
-            model.prepare()
-            updater.start()
+            model.prepare(); updater.start()
             NSApp.activate(ignoringOtherApps: true)
         }
-        .onDisappear {
-            model.accountProgressHandler = nil
-            account.cancelSignIn()
-        }
+        .onDisappear { model.accountProgressHandler = nil; account.cancelSignIn() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refreshNetworkAddressesIfIdle()
         }
         .onChange(of: model.phase) { _, phase in
-            readyConfirmed = false
-            savedConfirmed = false
+            readyConfirmed = false; setupReady = false; developerReady = false; savedConfirmed = false; saveDirectModeReady = false
             if phase == .failed {
-                showLogs = true
                 let location = model.diagnosticLogURL.map { "Log saved at:\n" + $0.path }
-                    ?? "A diagnostic log could not be created. The session activity remains visible in this window."
+                    ?? "A diagnostic log could not be created. Expand Console & Developer Options to view session activity."
                 failureText = (model.error ?? model.detail) + "\n\n" + location
                 showFailure = true
             }
         }
-        .onChange(of: model.runMode) { _, _ in readyConfirmed = false }
-        .onChange(of: model.usesDemo) { _, _ in readyConfirmed = false }
+        .onChange(of: model.runMode) { _, _ in readyConfirmed = false; setupReady = false; developerReady = false }
+        .onChange(of: model.selectedHost) { _, _ in
+            readyConfirmed = false; setupReady = false; developerReady = false
+            savedConfirmed = false; saveDirectModeReady = false; hostOnlyKeepRPC = false
+        }
         .onChange(of: model.selectedAddress) { _, _ in if canConfigure { readyConfirmed = false } }
         .onChange(of: updater.state) { _, state in if state == .failed { showUpdateFailure = true } }
+        .onChange(of: showFirstTimeSetup) { _, shown in if shown { setupReady = false } }
+        .onChange(of: showDeveloperOptions) { _, shown in if shown { developerReady = false } }
+        .sheet(isPresented: $showFirstTimeSetup) { firstTimeSetup }
         .alert("The session needs attention", isPresented: $showFailure) {
-            if model.diagnosticLogURL != nil {
-                Button("Open logs") { model.revealSessionFolder() }
-            }
+            if model.diagnosticLogURL != nil { Button("Open logs") { model.revealSessionFolder() } }
             Button("Close", role: .cancel) {}
         } message: { Text(failureText) }
         .alert("USB driver", isPresented: Binding(get: { driverMessage != nil }, set: { if !$0 { driverMessage = nil } })) {
@@ -106,17 +138,497 @@ struct ContentView: View {
         .alert("The update needs attention", isPresented: $showUpdateFailure) {
             if updater.diagnosticURL != nil { Button("Open update log") { updater.revealLog() } }
             Button("Close", role: .cancel) {}
-        } message: {
-            Text(updater.message + (updater.diagnosticURL.map { "\n\nLog saved at:\n" + $0.path } ?? ""))
-        }
+        } message: { Text(updater.message + (updater.diagnosticURL.map { "\n\nLog saved at:\n" + $0.path } ?? "")) }
         .confirmationDialog("Restart and update mac2jb?", isPresented: $confirmUpdate) {
             Button("Restart & update") {
                 updater.install(canRestart: model.canRestartForUpdate) {
                     model.recordDiagnostic("Restarting mac2jb to install the verified update.")
                 }
             }
-        } message: {
-            Text("The app will close, install the verified release, and reopen. Your logs and driver are kept. The previous app is saved as a backup.")
+        } message: { Text("The app will close, install the verified release, and reopen. Your logs and driver are kept. The previous app is saved as a backup.") }
+    }
+
+    private var home: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            if let notice = model.networkNotice { note(notice, icon: "network", color: .orange) }
+            if model.phase == .failed || model.phase == .cancelled {
+                note(model.detail, icon: "exclamationmark.circle", color: .orange)
+                if model.hasLiveWorkers {
+                    Text("Waiting for the previous session to close before starting again.").font(.system(size: 12)).foregroundStyle(Mac2jbTheme.muted)
+                }
+                if model.dumpFolder != nil { Button("Open dump folder") { model.revealDumpFolder() } }
+            }
+            panel {
+                VStack(alignment: .leading, spacing: 24) {
+                    essentials
+                    Divider().overlay(.white.opacity(0.04))
+                    VStack(alignment: .leading, spacing: 10) {
+                        demoEditionCheckbox
+                        Text("Restart your Switch and open SmileBASIC → Make a Program.")
+                            .font(.system(size: 12))
+                        Label("USB power: Switch → Mac. The Mac must not charge the Switch.", systemImage: "cable.connector")
+                            .font(.system(size: 11))
+                        Label("Connect both devices by Ethernet to the same local network.", systemImage: "network")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundStyle(Mac2jbTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    Toggle("My Switch is ready and connected by USB", isOn: $readyConfirmed).toggleStyle(.checkbox).font(.system(size: 12, weight: .medium))
+                        .fixedSize().disabled(configurationLocked)
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Host: \(model.selectedHost.label)").font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                        Button { beginRun(model.selectedHost.supportsHeldRPC ? .heldRPC : .exploitOnly) } label: {
+                            HStack(spacing: 14) { Text("Jailbreak"); Image(systemName: "arrow.right") }
+                        }.buttonStyle(PrimaryActionStyle(large: true))
+                            .disabled(startBlocked || !readyConfirmed || model.selectedAddress.isEmpty)
+                        Button("First time setting up mac2jb?") { showFirstTimeSetup = true }
+                            .buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundStyle(teal)
+                            .disabled(configurationLocked || updater.blocksNewSession)
+                    }
+                }
+            }
+        }
+    }
+
+    private var demoEditionCheckbox: some View {
+        Toggle("I’m using the SmileBASIC demo", isOn: Binding(
+            get: { model.selectedEdition == .demo },
+            set: { model.selectedEdition = $0 ? .demo : .full }
+        ))
+        .toggleStyle(.checkbox)
+        .font(.system(size: 12))
+        .disabled(configurationLocked || updater.blocksNewSession || !model.selectedHost.supportsDemo)
+        .help(model.selectedHost.supportsDemo ? "Use the demo LOADV command." : "Choose BermTheSequel to use the SmileBASIC demo.")
+    }
+
+    private var essentials: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: model.driverLoaded ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(model.driverLoaded ? teal : .orange).padding(.top, 2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.driverLoaded ? "USB driver loaded" : "USB driver setup needed")
+                        .font(.system(size: 12, weight: .semibold))
+                        .help("The driver check does not verify the cable connection. USB keyboard connection is checked when you start.")
+                    if !model.driverLoaded {
+                        Text(model.driverStatus).font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 6)
+                Group {
+                    if model.driverLoaded {
+                        Menu(model.driverSetupRunning ? "Installing…" : "Driver options") {
+                            Button("Refresh driver status") { model.refreshChecks() }
+                            Button("Reinstall & load driver…") { loadDriver() }
+                        }
+                    } else {
+                        Button(model.driverSetupRunning ? "Installing…" : "Install & load driver…") { loadDriver() }
+                    }
+                }
+                .font(.system(size: 11)).disabled(driverSetupBlocked)
+            }
+            networkPicker
+        }
+    }
+
+    private var networkPicker: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: model.addresses.isEmpty ? "network.slash" : "network").foregroundStyle(teal).frame(width: 16)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Mac connection").font(.system(size: 12, weight: .semibold))
+                if model.addresses.isEmpty {
+                    Text("No network address found.").font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                } else {
+                    Picker("Mac connection", selection: $model.selectedAddress) {
+                        ForEach(model.addresses) { address in Text(address.label).tag(address.address) }
+                    }.labelsHidden().frame(maxWidth: 360, alignment: .leading)
+                }
+            }
+            Spacer(minLength: 0)
+            Button { model.refreshChecks() } label: { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(.borderless).help("Refresh connection and driver checks")
+        }.disabled(configurationLocked)
+    }
+
+    private func beginRun(_ mode: SessionRunMode) {
+        guard !startBlocked, mode == .bootstrapOnly || !model.selectedAddress.isEmpty else { return }
+        model.selectRunMode(mode)
+        showFirstTimeSetup = false
+        model.start()
+    }
+
+    private var firstTimeSetup: some View {
+        sheetFrame(title: "First-time setup", subtitle: "Save a small program once. After that, use Jailbreak.", compact: true,
+                   close: { showFirstTimeSetup = false }, skip: {
+                       guard model.canSkipBootstrapTyping, !updater.blocksNewSession else { return }
+                       model.skipBootstrapTyping()
+                       if model.phase == .awaitingSave { showFirstTimeSetup = false }
+                   }, skipDisabled: !model.canSkipBootstrapTyping || updater.blocksNewSession) {
+            VStack(alignment: .leading, spacing: 18) {
+                Label("Open SmileBASIC → Make a Program with an empty editor.", systemImage: "keyboard")
+                    .font(.system(size: 13, weight: .medium))
+                Text("Keep the editor open. Your Mac will type the bootstrap, then guide you through saving it as NS2.")
+                    .font(.system(size: 12)).foregroundStyle(Mac2jbTheme.muted)
+                demoEditionCheckbox
+                Text("After typing, return to Direct mode so mac2jb can type the save command.")
+                    .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted).fixedSize(horizontal: false, vertical: true)
+                if !model.driverLoaded {
+                    note("Install the USB driver on the main screen before typing the setup program.", icon: "cable.connector", color: .orange)
+                }
+                powerDirectionNotice
+                Toggle("The empty editor is open and the USB cable is connected", isOn: $setupReady)
+                    .toggleStyle(.checkbox).font(.system(size: 12))
+                Button("Type the setup program") { beginRun(.bootstrapOnly) }
+                    .buttonStyle(PrimaryActionStyle()).disabled(startBlocked || !setupReady)
+            }
+        }
+    }
+
+    private var developerOptions: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            panel {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Host").font(.system(size: 15, weight: .semibold))
+                    Picker("Host", selection: Binding(get: { model.selectedHost }, set: { model.selectHost($0) })) {
+                        ForEach(HostProfile.allCases) { host in Text(host.label).tag(host) }
+                    }.pickerStyle(.menu).disabled(!model.canChangeHost || updater.blocksNewSession)
+                    Text("After changing hosts, type and save the selected host’s bootstrap before running Jailbreak.")
+                        .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                    if !model.selectedHost.supportsHeldRPC {
+                        Text("pepsipu closes RPC after verification. Choose kurumuz or BermTheSequel for held RPC and homebrew.")
+                            .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                    }
+                    if !model.selectedHost.supportsDemo {
+                        Text("This host’s bundled version supports the full edition of SmileBASIC.")
+                            .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                    }
+                }
+            }
+            panel {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Additional tools").font(.system(size: 15, weight: .semibold))
+                    Text("To start a new host or exploit, restart the Switch and open SmileBASIC → Make a Program with NS2 saved.")
+                        .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                    HStack(spacing: 16) {
+                        Button("Run host only") { model.startHostOnly(keepRPC: hostOnlyKeepRPC) }
+                            .disabled(!model.canStartHostOnly || updater.blocksNewSession)
+                        Toggle("Hold RPC after success", isOn: $hostOnlyKeepRPC)
+                            .toggleStyle(.checkbox).font(.system(size: 12)).disabled(configurationLocked || !model.selectedHost.supportsHeldRPC)
+                    }
+                    if showHostOnlyHomebrew { homebrewSection }
+                    Divider()
+                    existingRPCControls
+                    Divider()
+                    Toggle("The Switch is ready on the command screen", isOn: $developerReady).toggleStyle(.checkbox).font(.system(size: 12))
+                    HStack(spacing: 12) {
+                        Button("Run exploit only") { beginRun(.exploitOnly) }
+                        Button("Dump system code") { beginRun(.systemCodeDump) }.disabled(!model.selectedHost.supportsHeldRPC)
+                    }.disabled(startBlocked || !developerReady || model.selectedAddress.isEmpty)
+                    Divider()
+                    Text("Commands to send").font(.system(size: 12, weight: .semibold))
+                    VStack(alignment: .leading, spacing: 10) {
+                        commandToggle(.load, title: "LOAD \"TXT:NS2\"")
+                        commandToggle(.run, title: "RUN")
+                        commandToggle(.remove, title: "REMOVE NSR,&H60000000,&H3FFFFFFF")
+                        commandToggle(.start, title: "START — finish with keyboard")
+                    }.disabled(configurationLocked)
+                    Button("Type commands only") {
+                        model.startCommandsOnly(commands: selectedCommands, startPrefix: commandsToSend.contains(.start))
+                    }.disabled(startBlocked || !developerReady || !model.canStartCommandsOnly(commands: selectedCommands, startPrefix: commandsToSend.contains(.start)))
+                    if commandsToSend.contains(.start) {
+                        Text("START types V=START(39380, without Enter, then opens keyboard mirroring.")
+                            .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                    }
+                }
+            }
+            panel { keyboardControls }.id("keyboard-controls")
+            panel { usbTimingSettings }
+            panel {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Diagnostics").font(.system(size: 15, weight: .semibold))
+                    Text(AppBuildIdentity.versionLabel).font(.system(size: 11, design: .monospaced)).foregroundStyle(Mac2jbTheme.muted)
+                    if model.postRun.isActive {
+                        HStack {
+                            Button(model.postRun.statusInFlight ? "Checking…" : "Check RPC") { model.checkRPCStatus() }.disabled(!model.postRun.canCheckStatus)
+                            Button("Copy RPC command") { model.copyRPCCommand() }.disabled(model.rpcCommand.isEmpty)
+                            Button("Open run logs") { model.revealRunFolder() }
+                        }.font(.system(size: 11))
+                        if !model.rpcStatus.isEmpty { Text(model.rpcStatus).font(.system(size: 11)).textSelection(.enabled) }
+                    }
+                }
+            }
+        }
+    }
+
+    private var existingRPCControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("RPC already held").font(.system(size: 15, weight: .semibold))
+            Text("Use a session that is already jailbroken on this Mac. Select its switch2 run folder and keep the original host and SmileBASIC open.")
+                .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+            TextField("Existing run folder", text: $model.existingRPCRunPath)
+                .textFieldStyle(.roundedBorder).font(.system(size: 11))
+                .disabled(!model.canChangeHost)
+            HStack {
+                Button("Choose run folder…") { chooseExistingRPCRun() }.disabled(!model.canChangeHost)
+                Spacer()
+                Button("Connect to open RPC") { model.attachExistingRPC() }
+                    .disabled(!model.canAttachExistingRPC || updater.blocksNewSession)
+            }.font(.system(size: 11))
+            Text(model.selectedHost.supportsHeldRPC
+                 ? "After connecting, choose a homebrew app. Disconnect stops this app’s workers and leaves the original host running."
+                 : "Choose kurumuz or BermTheSequel above to connect to held RPC.")
+                .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+        }
+    }
+
+    private func chooseExistingRPCRun() {
+        guard model.canChangeHost else { return }
+        let picker = NSOpenPanel()
+        picker.title = "Choose the existing RPC run"
+        picker.message = "Select the switch2 run folder shown by the original host. It contains connection.json and result.json."
+        picker.canChooseDirectories = true; picker.canChooseFiles = false; picker.allowsMultipleSelection = false
+        if model.existingRPCRunPath.hasPrefix("/") { picker.directoryURL = URL(fileURLWithPath: model.existingRPCRunPath) }
+        picker.begin { response in
+            if response == .OK, let url = picker.url { model.existingRPCRunPath = url.path }
+        }
+    }
+
+    private var selectedCommands: [PostBootstrapCommand] {
+        PostBootstrapCommand.allCases.filter { commandsToSend.contains($0) }
+    }
+
+    private func commandToggle(_ command: PostBootstrapCommand, title: String) -> some View {
+        Toggle(title, isOn: Binding(get: { commandsToSend.contains(command) }, set: { selected in
+            if selected { commandsToSend.insert(command) }
+            else { commandsToSend.remove(command) }
+        }))
+        .toggleStyle(.checkbox).font(.system(size: 11, design: .monospaced))
+    }
+
+    private var keyboardControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Live keyboard").font(.system(size: 15, weight: .semibold))
+            if !model.keyboardIsLoading {
+                Text("Use this Mac’s keyboard to type on the Switch. Click the capture area while connected; Escape stops forwarding.")
+                    .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                Text(model.keyboardStatus).font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+            }
+            if keyboardPanelOpen {
+                if model.keyboardIsLoading {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading…").font(.system(size: 13, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 110)
+                    .background(.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                } else if model.keyboardActive {
+                    if model.keyboardTextSending {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ProgressView(value: Double(model.keyboardTextSent), total: Double(max(1, model.keyboardTextTotal)))
+                            Text("\(model.keyboardTextSent) of \(model.keyboardTextTotal) characters sent")
+                                .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                        }
+                    } else {
+                        KeyboardCaptureView(active: model.keyboardAcceptsPhysicalInput, onReport: { model.sendKeyboardReport($0) }, onStop: { model.stopKeyboardForwarding() })
+                            .frame(height: 80).background(.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    Text("Paste or type text").font(.system(size: 12, weight: .medium))
+                    KeyboardTextEditor(text: $model.keyboardText, isEditable: !model.keyboardTextSending)
+                        .frame(minHeight: 100, maxHeight: 160)
+                        .padding(6)
+                        .background(.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+                    Text("Paste with ⌘V. ASCII text, tabs and newlines only; 16 KiB maximum. Newlines press Enter. No extra Enter is added.")
+                        .font(.system(size: 10)).foregroundStyle(Mac2jbTheme.muted)
+                    HStack {
+                        Button("Send text") { model.sendKeyboardText() }.disabled(!model.canSendKeyboardText)
+                        Text("\(model.keyDelayMs) ms per key").font(.system(size: 10)).foregroundStyle(Mac2jbTheme.muted)
+                    }
+                    if !model.keyboardTextStatus.isEmpty {
+                        Text(model.keyboardTextStatus).font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                    }
+                    if !model.keyboardText.isEmpty, !model.keyboardTextSending, let message = model.keyboardTextValidationMessage {
+                        Text(message).font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                    }
+                }
+                Button("Stop keyboard") { model.stopKeyboardForwarding() }
+                    .disabled(model.phase == .keyboardForwarding && !model.keyboardActive)
+            } else {
+                Button("Use Mac keyboard") { model.startKeyboardForwarding() }.disabled(!model.canStartKeyboard || updater.blocksNewSession)
+            }
+        }
+    }
+
+    private var usbTimingSettings: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("USB & timing").font(.system(size: 15, weight: .semibold))
+            Picker("Controller", selection: $model.controller) {
+                Text("Automatic").tag("auto")
+                ForEach(0..<16) { Text("usb-drd\($0)").tag("usb-drd\($0)") }
+            }
+            if model.controller == "auto", let controller = model.lastSuccessfulController {
+                Text("Will try \(controller) first.")
+                    .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+            }
+            timingField("Delay per key", units: "ms", value: $model.keyDelayMs, range: 1...2000)
+            timingField("Enumeration timeout per controller", units: "s", value: $model.enumerationTimeoutSeconds, range: 1...120)
+            Divider()
+            timingField("Before confirming LOAD / LOADV", units: "ms", value: $model.loadConfirmWaitMs, range: 0...120000)
+            timingField("After LOAD → before RUN", units: "ms", value: $model.loadWaitMs, range: 0...120000)
+            timingField("After RUN → before REMOVE", units: "ms", value: $model.runWaitMs, range: 0...120000)
+            timingField("After REMOVE → before START", units: "ms", value: $model.removeWaitMs, range: 0...120000)
+            HStack {
+                Text("Defaults: 10 ms/key · 4 s connection · 1 s LOAD confirmation · 1 s between commands.")
+                    .font(.system(size: 10)).foregroundStyle(Mac2jbTheme.muted)
+                Spacer(minLength: 8)
+                Button("Reset defaults") {
+                    model.keyDelayMs = 10; model.enumerationTimeoutSeconds = 4
+                    model.loadConfirmWaitMs = 1000; model.loadWaitMs = 1000; model.runWaitMs = 1000; model.removeWaitMs = 1000
+                }.font(.system(size: 10))
+            }
+            if !timingSettingsValid { Text("Enter values within the ranges shown before starting.").font(.system(size: 11)).foregroundStyle(.orange) }
+        }.disabled(configurationLocked)
+    }
+
+    private func sheetFrame<Content: View>(title: String, subtitle: String, compact: Bool = false, close: @escaping () -> Void,
+                                         skip: (() -> Void)? = nil, skipDisabled: Bool = false,
+                                         @ViewBuilder content: () -> Content) -> some View {
+        let contents = VStack(alignment: .leading, spacing: 24) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(title).font(.system(size: 26, weight: .bold, design: .rounded))
+                    Text(subtitle).font(.system(size: 12)).foregroundStyle(Mac2jbTheme.muted)
+                }
+                Spacer()
+                if let skip {
+                    Button("Cancel", action: close)
+                    Button("Skip", action: skip)
+                        .disabled(skipDisabled)
+                        .help("Continue to saving. The complete current bootstrap must already be in PRG0.")
+                } else {
+                    Button("Done", action: close).disabled(model.keyboardActive || model.phase == .keyboardConnecting)
+                }
+            }
+            content()
+        }.padding(30)
+        return Group {
+            if compact {
+                contents.frame(width: 720).fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView { contents }.frame(width: 720, height: 650)
+            }
+        }.background { Mac2jbBackdrop() }.preferredColorScheme(.dark).tint(teal)
+    }
+
+    private var activeSession: some View {
+        panel {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(alignment: .top, spacing: 16) {
+                    Image(systemName: model.phase == .verified || model.postRun.heldConfirmed ? "checkmark.circle.fill" : model.activeRunMode.isHostOnly ? "network" : "cable.connector")
+                        .font(.system(size: 29)).foregroundStyle(teal).frame(width: 52, height: 52)
+                        .background(teal.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(headline).font(.system(size: 28, weight: .bold, design: .rounded)).foregroundStyle(ink)
+                        Text(model.detail).font(.system(size: 13)).foregroundStyle(Mac2jbTheme.muted).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if model.isBusy {
+                    if let progress = model.progress { ProgressView(value: progress).tint(teal) }
+                    else { ProgressView().progressViewStyle(.linear).tint(teal) }
+                    if !model.progressLabel.isEmpty {
+                        Text(model.progressLabel).font(.system(size: 11, design: .monospaced)).foregroundStyle(Mac2jbTheme.muted).monospacedDigit()
+                    }
+                    if model.phase == .bootstrap {
+                        HStack(spacing: 14) {
+                            Text("Elapsed " + durationText(model.bootstrapElapsedSeconds))
+                            if let remaining = model.bootstrapEstimatedRemainingSeconds {
+                                Text(durationText(remaining.rounded(.up)) + " remaining")
+                            }
+                        }.font(.system(size: 11, design: .monospaced)).foregroundStyle(Mac2jbTheme.muted).monospacedDigit()
+                    }
+                }
+                if model.isEnumerating { powerDirectionNotice }
+                if model.activeRunMode.isHostOnly,
+                   model.phase == .waitingForConsole, !model.hostStartCommand.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Enter these once in SmileBASIC:").font(.system(size: 12, weight: .semibold))
+                        Text([model.activeEdition.loadCommand, "RUN", "REMOVE NSR,&H60000000,&H3FFFFFFF", model.hostStartCommand].joined(separator: "\n"))
+                            .font(.system(size: 13, design: .monospaced)).textSelection(.enabled)
+                        Text("Enter each line separately. Confirm LOAD when prompted. “Out of memory” after REMOVE is expected.")
+                            .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                    }
+                }
+                if model.phase == .awaitingSave { saveSetupControls }
+                if model.phase == .verified || model.phase == .commandsSent || model.phase == .rpcDetached {
+                    if model.phase == .verified {
+                        Text("The session finished and cleanup was confirmed. Restart the Switch before starting again.")
+                            .font(.system(size: 12)).foregroundStyle(Mac2jbTheme.muted)
+                    }
+                    Button("Back to start") { model.returnToStart() }.buttonStyle(PrimaryActionStyle()).disabled(!model.canReturnToStart)
+                }
+                if model.postRun.isActive { postRunControls }
+                if !showHostOnlyHomebrew && model.activeSessionSupportsHomebrew && (model.postRun.heldConfirmed || model.postRun.homebrewAttempted) { homebrewSection }
+                if model.postRun.dumpCompleted, model.dumpFolder != nil { Button("Open dump folder") { model.revealDumpFolder() } }
+                if model.isBusy || model.phase == .awaitingSave {
+                    HStack {
+                        Text("Keep SmileBASIC open until the session finishes.").font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                        Spacer()
+                        Button("Stop session", role: .destructive) { model.cancel() }
+                    }
+                }
+            }
+        }
+    }
+
+    private var saveSetupControls: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Divider()
+            if model.bootstrapSaveCommandSent {
+                Label("Save command typed", systemImage: "keyboard")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Confirm saving on the Switch. Overwrite the existing NS2 file if prompted, then wait for saving to finish.")
+                    .font(.system(size: 13)).foregroundStyle(Mac2jbTheme.muted)
+            } else {
+                Text(model.workflowProgress.bootstrapTypingWasSkipped
+                     ? model.activeEdition.saveInstructions.replacingOccurrences(of: "The bootstrap has finished typing. ", with: "Check that the complete current bootstrap is already in PRG0. ")
+                     : model.activeEdition.saveInstructions).font(.system(size: 13)).foregroundStyle(Mac2jbTheme.muted)
+                Toggle("Direct mode is open with an empty command prompt", isOn: $saveDirectModeReady)
+                    .toggleStyle(.checkbox).font(.system(size: 12)).disabled(model.hasLiveWorkers)
+                Button("Type save command") { model.typeBootstrapSave(directModeConfirmed: saveDirectModeReady) }
+                    .buttonStyle(PrimaryActionStyle()).disabled(!saveDirectModeReady || !model.canTypeBootstrapSave)
+                if !model.driverLoaded {
+                    Text("Load the USB driver to type automatically, or use the manual command below.")
+                        .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                }
+            }
+            DisclosureGroup("Save command (manual option)") {
+                Text(model.activeEdition.saveCommands.joined(separator: "\n"))
+                    .font(.system(size: 14, design: .monospaced)).textSelection(.enabled)
+            }.font(.system(size: 12))
+            Toggle(model.activeEdition.savedConfirmation, isOn: $savedConfirmed)
+                .toggleStyle(.checkbox).font(.system(size: 12)).disabled(model.hasLiveWorkers)
+            Button("NS2 saved — back to start") { model.finishBootstrapOnly() }
+                .buttonStyle(PrimaryActionStyle()).disabled(!savedConfirmed || model.hasLiveWorkers)
+        }
+    }
+
+    private var postRunControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider()
+            if model.postRun.heldConfirmed {
+                Label(model.isAttachedRPCSession ? "Existing RPC connection verified" : "Switch connection verified · 4/4", systemImage: "checkmark.shield.fill")
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(teal)
+            }
+            Text(model.postRun.cleanupBlocked
+                 ? "Restart your Switch, then use Stop session. Cleanup could not be confirmed."
+                 : model.phase == .dumpingFirmware
+                    ? "Keep SmileBASIC open until the dump finishes. Stopping early may leave a partial dump."
+                    : model.isAttachedRPCSession ? "When you’re done, disconnect here. The original host keeps its RPC session open." : "When you’re done, finish the session before closing SmileBASIC.")
+                .font(.system(size: 12)).foregroundStyle(Mac2jbTheme.muted)
+            HStack {
+                Button("Session details…") { showDeveloperOptions = true }.font(.system(size: 11))
+                Spacer()
+                Button(model.isAttachedRPCSession ? "Disconnect" : "Finish session") { model.finishPostRun() }.buttonStyle(PrimaryActionStyle()).disabled(!model.postRun.canFinish)
+            }
         }
     }
 
@@ -125,7 +637,7 @@ struct ContentView: View {
             Text(updater.message).font(.system(size: 12, weight: .medium)).foregroundStyle(ink)
             if updater.requiredUpdate {
                 Text("Update mac2jb before starting a new session. You can finish the current session first.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
             }
             if updater.state == .downloading { ProgressView(value: updater.progress).tint(teal) }
             HStack {
@@ -137,7 +649,7 @@ struct ContentView: View {
                         .buttonStyle(.borderedProminent).disabled(!model.canRestartForUpdate)
                     if !model.canRestartForUpdate {
                         Text("Available after the current session or driver setup finishes.")
-                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                            .font(.system(size: 10)).foregroundStyle(Mac2jbTheme.muted)
                     }
                 }
                 if let release = updater.candidate?.releaseURL {
@@ -161,339 +673,86 @@ struct ContentView: View {
             .background(teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Text("mac2jb").font(.system(size: 26, weight: .bold, design: .rounded)).foregroundStyle(.white)
-            }
-            .padding(.top, 48)
-            VStack(spacing: 26) {
-                step(0, "Prepare", "Mac, network & console")
-                step(1, "Type bootstrap", model.fullInstall ? "Type first, then save" : "Use your saved NS2")
-                step(2, "Run & verify", model.fullInstall ? "Choose a separate run mode" : "Host and commands")
-            }.padding(.top, 55)
-            Spacer(minLength: 40)
-            Text(AppBuildIdentity.versionLabel)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.35))
-        }
-        .padding(.horizontal, 25).padding(.bottom, 30)
-        .frame(width: 225)
-        .background(ink)
-    }
-
-    private func step(_ number: Int, _ title: String, _ subtitle: String) -> some View {
-        let state = model.workflowProgress.state(for: number)
-        let failedColor = Color(red: 1, green: 0.58, blue: 0.58)
-        let active = state == .active
-        let stateLabel: String
-        switch state {
-        case .pending: stateLabel = "Not started"
-        case .active: stateLabel = "Current step"
-        case .complete: stateLabel = "Completed"
-        case .failed: stateLabel = "Failed or cancelled"
-        }
-        return HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                Circle().fill(active ? Color.mint : state == .failed ? failedColor.opacity(0.14) : .white.opacity(0.08))
-                    .frame(width: 29, height: 29)
-                if state == .complete {
-                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.mint)
-                } else if state == .failed {
-                    Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(failedColor)
-                } else {
-                    Text(String(format: "%02d", number + 1)).font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(active ? ink : .white.opacity(0.45))
-                }
-            }
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title).font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(state == .failed ? failedColor : .white.opacity(active ? 1 : 0.65))
-                Text(subtitle).font(.system(size: 10)).foregroundStyle(.white.opacity(0.35))
-            }.padding(.top, 2)
-            Spacer(minLength: 0)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Step \(number + 1): \(title)")
-        .accessibilityValue(stateLabel)
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            Text(headline).font(.system(size: 31, weight: .bold, design: .rounded)).tracking(-0.9).foregroundStyle(ink)
-            Text(canConfigure ? "Choose your starting point. mac2jb handles the Mac side in this window." : model.detail)
-                .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var setup: some View {
-        VStack(spacing: 18) {
-            if let notice = model.networkNotice {
-                note(notice, icon: "network", color: .orange)
-            }
-            if model.phase == .failed || model.phase == .cancelled {
-                note(model.detail, icon: "exclamationmark.circle", color: .orange)
-                if model.hasLiveWorkers {
-                    Text("Waiting for the previous host to finish cleanup before another session can start.")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
-                }
-                if model.dumpFolder != nil {
-                    Button("Open dump folder") { model.revealDumpFolder() }
-                }
-            }
-            panel {
-                VStack(alignment: .leading, spacing: 16) {
-                    eyebrow("01 / STARTING POINT")
-                    modeCard(.bootstrapOnly)
-                    Toggle("I’m using the SmileBASIC demo", isOn: Binding(
-                        get: { model.usesDemo }, set: { model.setUsesDemo($0) }))
-                        .toggleStyle(.checkbox).font(.system(size: 12, weight: .medium))
-                    Text(model.usesDemo
-                         ? "Uses SAVEV to save the bootstrap and LOADV to restore it. This choice is remembered for later runs."
-                         : "Uses the full version’s SAVE and LOAD commands.")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                    Divider()
-                    modeCard(.heldRPC)
-                    Text(model.usesDemo
-                         ? "Requires the bootstrap already saved as TXT:NS2 using SAVEV. Use Type bootstrap only above if you still need to save it."
-                         : "Requires the bootstrap already saved in slot 0 as NS2. Use Type bootstrap only above if you still need to save it.")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    homebrewSection
-                    Divider()
-                    Text("Optional tasks").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
-                    HStack(alignment: .top, spacing: 10) {
-                        modeCard(.systemCodeDump)
-                        modeCard(.exploitOnly)
-                    }
-                    Text("For Held RPC, System-code dump and NS2JB exploit only, restart the Switch, open SmileBASIC and choose Make a Program. Each uses your saved NS2.")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }.disabled(model.hasLiveWorkers || model.driverSetupRunning)
-            }
-            panel {
-                VStack(alignment: .leading, spacing: 15) {
-                    eyebrow("02 / READY CHECK")
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: model.driverLoaded ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                            .foregroundStyle(model.driverLoaded ? teal : .orange)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("USB gadget driver").font(.system(size: 12, weight: .semibold))
-                            Text(model.driverStatus).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer()
-                        Button(model.driverSetupRunning ? "Installing…" : "Install & load driver…") { loadDriver() }
-                            .font(.system(size: 11)).disabled(model.driverSetupRunning || model.runtime == nil || model.hasLiveWorkers)
-                    }
-                    connectionSettings
-                    Group {
-                        if model.fullInstall {
-                            Text("On the Switch: open SmileBASIC, then **Make a Program** with an empty editor. Leave the editor open while the bootstrap is typed.")
-                        } else {
-                            Text(model.usesDemo
-                                 ? "On the Switch: **restart the console → open the SmileBASIC demo → Make a Program**. The fork’s five-argument bootstrap must already be saved as **TXT:NS2 using SAVEV**. mac2jb restores it into slot 0 automatically."
-                                 : "On the Switch: **restart the console → open SmileBASIC → Make a Program**. The fork’s five-argument bootstrap must already be saved as **NS2 in slot 0**. mac2jb loads it automatically.")
-                        }
-                    }
-                        .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    if !model.fullInstall {
-                        Text("If the program editor is open, press X to return to the command screen before starting.")
-                            .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                    powerDirectionNotice
-                    Toggle("The Switch is ready on the screen described above", isOn: $readyConfirmed)
-                        .toggleStyle(.checkbox).font(.system(size: 12, weight: .medium))
-                    HStack {
-                        Text(model.fullInstall ? "Types the bootstrap at your selected key delay, then stops for saving." : model.runMode.caption)
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
-                        Spacer()
-                        Button { showLogs = true; model.start() } label: {
-                            HStack(spacing: 10) { Text(model.runMode.startTitle); Image(systemName: "arrow.right") }
-                                .padding(.horizontal, 10).padding(.vertical, 6)
-                        }
-                        .buttonStyle(PrimaryActionStyle()).fixedSize()
-                        .disabled(!readyConfirmed || model.runMode.requiresHost && model.selectedAddress.isEmpty || model.runtime == nil || !model.driverLoaded || !timingSettingsValid || model.driverSetupRunning || model.hasLiveWorkers || updater.blocksNewSession)
-                    }
-                }
-            }
-        }
-    }
-
-    private var connectionSettings: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            if model.runMode.requiresHost { HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Mac address on the Switch’s network").font(.system(size: 12, weight: .semibold))
-                    if model.addresses.isEmpty {
-                        Text("Connect this Mac to your local network, then refresh.").font(.system(size: 11)).foregroundStyle(.secondary)
-                    } else {
-                        Picker("Network address", selection: $model.selectedAddress) {
-                            ForEach(model.addresses) { address in
-                                Text(address.label).tag(address.address)
-                            }
-                        }.labelsHidden().frame(maxWidth: .infinity)
-                    }
-                }
-                Button { model.refreshChecks() } label: { Image(systemName: "arrow.clockwise") }
-                    .help("Refresh network and driver checks").padding(.top, 22)
-            } }
-            DisclosureGroup("USB controller & timing options") {
-                VStack(alignment: .leading, spacing: 14) {
-                    Picker("Controller", selection: $model.controller) {
-                        Text("Automatic · 0, 1, 3").tag("auto")
-                        ForEach(0..<16) { Text("usb-drd\($0)").tag("usb-drd\($0)") }
-                    }
-                    Divider()
-                    timingField("Delay per key", units: "ms", value: $model.keyDelayMs, range: 1...2000)
-                    timingField("Enumeration timeout per controller", units: "s", value: $model.enumerationTimeoutSeconds, range: 1...120)
-                    Divider()
-                    Text("Post-bootstrap waits").font(.system(size: 11, weight: .semibold)).foregroundStyle(ink)
-                    if !model.usesDemo {
-                        timingField("Before confirming LOAD (YES)", units: "ms", value: $model.loadConfirmWaitMs, range: 0...120000)
-                    }
-                    timingField("After LOAD → before RUN", units: "ms", value: $model.loadWaitMs, range: 0...120000)
-                    timingField("After RUN → before REMOVE", units: "ms", value: $model.runWaitMs, range: 0...120000)
-                    timingField("After REMOVE → before START", units: "ms", value: $model.removeWaitMs, range: 0...120000)
-                    HStack {
-                        Text(model.usesDemo
-                             ? "Defaults: 50 ms/key · 4 s enumeration · 3 s between commands. Demo LOADV skips the LOAD confirmation."
-                             : "Defaults: 50 ms/key · 4 s enumeration · 1 s LOAD confirmation · 3 s between commands.")
-                            .font(.system(size: 10)).fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 8)
-                        Button("Reset defaults") {
-                            model.keyDelayMs = 50; model.enumerationTimeoutSeconds = 4
-                            model.loadConfirmWaitMs = 1000; model.loadWaitMs = 3000
-                            model.runWaitMs = 3000; model.removeWaitMs = 3000
-                        }.font(.system(size: 10))
-                    }
-                    if !timingSettingsValid {
-                        Text("Enter values within the ranges shown before starting.")
-                            .font(.system(size: 11)).foregroundStyle(.orange)
-                    }
-                }.padding(.top, 10)
-            }.font(.system(size: 11)).foregroundStyle(.secondary)
-        }
-        .disabled(model.hasLiveWorkers || model.driverSetupRunning)
-    }
-
-    private var activeSession: some View {
-        panel {
-            VStack(alignment: .leading, spacing: 20) {
-                eyebrow("SESSION / \(model.phase == .verified ? "COMPLETE" : "IN PROGRESS")")
-                HStack(alignment: .center, spacing: 18) {
-                    Image(systemName: model.phase == .verified ? "checkmark.seal.fill" : "cable.connector")
-                        .font(.system(size: 34)).foregroundStyle(teal).frame(width: 56, height: 56)
-                        .background(teal.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(model.status).font(.system(size: 17, weight: .semibold)).foregroundStyle(ink)
-                        Text(model.activeRunMode == .bootstrapOnly ? "Bootstrap only · \(model.controller == "auto" ? "Automatic controller" : model.controller)" : model.activeAddress.isEmpty ? "Preparing the embedded runtime" : "\(model.activeAddress) · \(model.controller == "auto" ? "Automatic controller" : model.controller)")
-                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-                    }
-                }
-                if model.isBusy {
-                    if let progress = model.progress { ProgressView(value: progress).tint(teal) }
-                    else { ProgressView().progressViewStyle(.linear).tint(teal) }
-                    if !model.progressLabel.isEmpty {
-                        Text(model.progressLabel).font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary).monospacedDigit()
-                    }
-                    if model.phase == .bootstrap {
-                        HStack(spacing: 14) {
-                            Text(String(format: "Elapsed %.1f s", model.bootstrapElapsedSeconds))
-                            if let remaining = model.bootstrapEstimatedRemainingSeconds {
-                                Text(String(format: "Estimated completion in %.1f s", max(0, remaining)))
-                            } else {
-                                Text("Estimating completion…")
-                            }
-                        }
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                    }
-                }
-                if model.isEnumerating { powerDirectionNotice }
-                if model.phase == .awaitingSave {
-                    Divider()
-                    Text(model.activeEdition.saveInstructions)
-                        .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    Text(model.activeEdition.saveCommands.joined(separator: "\n"))
-                        .font(.system(size: 13, design: .monospaced)).textSelection(.enabled)
-                    Toggle(model.activeEdition.savedConfirmation, isOn: $savedConfirmed)
-                        .toggleStyle(.checkbox).font(.system(size: 12, weight: .medium))
-                    Button("NS2 saved — back to start") { model.finishBootstrapOnly() }
-                        .buttonStyle(PrimaryActionStyle()).fixedSize().disabled(!savedConfirmed || model.hasLiveWorkers)
-                } else if model.phase == .verified {
-                    Text("The host confirmed execution, restoration, and cleanup. Restart the console when finished.")
-                        .font(.system(size: 13)).foregroundStyle(.secondary)
-                    HStack {
-                        Button("Back to start") { model.returnToStart() }
-                            .buttonStyle(PrimaryActionStyle()).fixedSize().disabled(!model.canReturnToStart)
-                        if model.hasLiveWorkers {
-                            Text("Waiting for the session workers to close…")
-                                .font(.system(size: 11)).foregroundStyle(.secondary)
-                        }
-                    }
-                } else if model.phase == .waitingForConsole {
-                    Text("Keyboard transmission is complete. Keep SmileBASIC open and both devices awake while the host checks the result.")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
-                }
-                if model.postRun.isActive { postRunControls }
-                if model.activeRunMode == .heldRPC && (model.postRun.isActive || model.postRun.homebrewAttempted) {
-                    homebrewSection
-                }
-                if model.postRun.dumpCompleted, model.dumpFolder != nil {
-                    Button("Open dump folder") { model.revealDumpFolder() }
-                        .font(.system(size: 12))
-                }
-                if model.isBusy || model.phase == .awaitingSave {
-                    HStack {
-                        Label("Only this app’s session will be stopped", systemImage: "lock")
-                            .font(.system(size: 10)).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Stop session", role: .destructive) { model.cancel() }
-                    }
-                }
-            }
-        }
-    }
-
     private var homebrewSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Homebrew requires Held RPC")
+            Text("Choose an app")
                 .font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
-            Text("Select Held RPC above and wait for 4/4 verification in this app before launching any of these tools.")
-                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(canConfigure && showHostOnlyHomebrew
+                 ? "Run host only with Hold RPC after success checked. Choose an app here once the host confirms 4/4 verification and holds RPC open."
+                 : model.postRun.cleanupBlocked
+                 ? "Restart your Switch before starting another session."
+                 : model.postRun.homebrewAttempted
+                    ? "One app per console session. Restart the console and start a fresh host session before choosing another."
+                    : model.postRun.heldConfirmed ? "Your Switch is connected. Choose one app for this session." : "Waiting for the host to verify the Switch and hold RPC open.")
+                .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted).fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "gamecontroller").font(.system(size: 22)).foregroundStyle(teal)
+                Image(systemName: "gamecontroller.fill").font(.system(size: 22)).foregroundStyle(teal).frame(width: 32)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("HBLauncher v0.2.0").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
-                    Text(homebrewCaption).font(.system(size: 11)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text("GPUBrewLauncher").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+                    Text(homebrewCaption).font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                    Text("Includes Hello World, Froggy Road and ftpd-sb v0.1.0.")
+                        .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
                 }
                 Spacer(minLength: 8)
-                Button(model.postRun.homebrewAttempted && model.homebrewTitle.contains("HBLauncher") ? homebrewActionTitle : "Launch HBLauncher") { model.launchHomebrew() }
-                    .font(.system(size: 11, weight: .medium)).disabled(!model.canLaunchHomebrew)
+                Button(!canConfigure && model.postRun.homebrewAttempted && model.homebrewTitle.contains("GPUBrewLauncher") ? homebrewActionTitle : "Launch GPUBrew") {
+                    model.launchGPUBrewLauncher()
+                }.font(.system(size: 11, weight: .medium)).disabled(!model.canLaunchHomebrew)
             }
-            Text("Includes ftpd-sb v0.1.0 in HBLauncher’s app menu.")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
+            Divider()
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "square.grid.2x2.fill").font(.system(size: 22)).foregroundStyle(teal).frame(width: 32)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("HBLauncher").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+                    Text(model.homebrewTitle == "HBLauncher" && model.postRun.homebrewAttempted
+                         ? model.homebrewMessage : "Open HBLauncher in the current held RPC session.")
+                        .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                }
+                Spacer(minLength: 8)
+                Button(model.postRun.homebrewAttempted && model.homebrewTitle == "HBLauncher" ? homebrewActionTitle : "Launch HBLauncher") {
+                    model.launchHBLauncher()
+                }.font(.system(size: 11, weight: .medium)).disabled(!model.canLaunchHomebrew)
+            }
+            Divider()
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "square.stack.3d.up.fill").font(.system(size: 22)).foregroundStyle(teal).frame(width: 32)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("IZlauncher").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+                    Text(model.homebrewTitle == "IZlauncher" && model.postRun.homebrewAttempted
+                         ? model.homebrewMessage : "Open the IZlauncher console shell. Streaming modules are not included.")
+                        .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
+                }
+                Spacer(minLength: 8)
+                Button(model.postRun.homebrewAttempted && model.homebrewTitle == "IZlauncher" ? homebrewActionTitle : "Launch IZlauncher") {
+                    model.launchIZlauncher()
+                }.font(.system(size: 11, weight: .medium)).disabled(!model.canLaunchIZlauncher)
+            }
             Divider()
             ounceCakeControls
             Divider()
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "play.rectangle").font(.system(size: 22)).foregroundStyle(teal)
+                Image(systemName: "play.rectangle").font(.system(size: 22)).foregroundStyle(teal).frame(width: 32)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Stremio · experimental").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
-                    Text("Mac-assisted HTTP and HLS player. Stremio must be installed on this Mac.")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    if !model.postRun.homebrewAttempted {
+                    Text("Stremio").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+                    Text("Watch on your Switch using Stremio installed on this Mac.")
+                        .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted).fixedSize(horizontal: false, vertical: true)
+                    if !model.postRun.homebrewAttempted || canConfigure {
+                        Picker("Quality", selection: $model.stremioQuality) {
+                            ForEach(StremioQuality.allCases) { quality in
+                                Text(quality.label).tag(quality)
+                            }
+                        }
+                        .pickerStyle(.menu).font(.system(size: 11))
+                        .disabled(!canConfigure && !model.canLaunchHomebrew)
                         TextField("Optional Stremio add-on manifest URL", text: $model.stremioAddonURL)
                             .textFieldStyle(.roundedBorder).font(.system(size: 11))
                             .disabled(!canConfigure && !model.canLaunchHomebrew)
-                        Text("Leave empty to use your account add-ons, or the bundled 30-second movie test. Library and watch progress sync with your account; torrents and subtitles are unsupported.")
-                            .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text("Use your account add-ons, or leave empty for the bundled sample. Library and progress sync when signed in. Audio and SRT/WebVTT subtitle options are in the player. Torrents aren’t supported.")
+                            .font(.system(size: 10)).foregroundStyle(Mac2jbTheme.muted).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer(minLength: 8)
-                Button(model.postRun.homebrewAttempted && model.homebrewTitle.contains("Stremio") ? homebrewActionTitle : "Launch Stremio") {
-                    model.launchHomebrew(stremio: true, accountAddons: account.addonURLs,
+                Button(!canConfigure && model.postRun.homebrewAttempted && model.homebrewTitle.contains("Stremio") ? homebrewActionTitle : "Launch Stremio") {
+                    model.launchStremio(accountAddons: account.addonURLs,
                                          libraryItems: account.libraryPayload())
                 }
                 .font(.system(size: 11, weight: .medium))
@@ -501,44 +760,44 @@ struct ContentView: View {
             }
             stremioAccountControls
             if !model.stremioToolsAvailable {
-                Text("Install Stremio on this Mac to enable the experimental player.").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text("Install Stremio on this Mac to enable the player.").font(.system(size: 10)).foregroundStyle(Mac2jbTheme.muted)
             }
             if model.homebrewFolder != nil {
                 Button("Open homebrew logs") { model.revealHomebrewLogs() }.font(.system(size: 11))
             }
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-        .background(teal.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 16))
     }
 
     private var homebrewCaption: String {
-        if canConfigure { return "Start Held RPC above and wait for 4/4 verification in this app." }
+        if canConfigure { return showHostOnlyHomebrew ? "Start the host above and complete its console commands first." : "Connect your Switch with Jailbreak first." }
         if model.postRun.homebrewAttempted {
-            return model.homebrewTitle.contains("HBLauncher")
-                ? "HBLauncher uses this app’s verified held RPC session. Keep SmileBASIC open until you finish."
-                : "Start a fresh Held RPC session after restarting the console to launch HBLauncher."
+            return model.homebrewTitle.contains("GPUBrewLauncher")
+                ? "Keep SmileBASIC open until you finish the session."
+                : "Restart the Switch and run a new session to choose another app."
         }
-        if model.canLaunchHomebrew { return "Launch using this app’s current verified held RPC session." }
-        return "Waiting for this app’s held RPC session to be confirmed and idle."
+        if model.canLaunchHomebrew { return "Open homebrew apps on your Switch." }
+        return "Waiting for the Switch connection to be ready."
     }
 
     private var ounceCakeControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "externaldrive").font(.system(size: 22)).foregroundStyle(teal)
+                Image(systemName: "externaldrive").font(.system(size: 22)).foregroundStyle(teal).frame(width: 32)
                 VStack(alignment: .leading, spacing: 5) {
                     Text("OunceCake").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
-                    Text("Read-only game files over FTP. Start Held RPC above, then open the game list.")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text("Browse and copy your game files over a read-only FTP connection.")
+                        .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted).fixedSize(horizontal: false, vertical: true)
                     if !model.postRun.homebrewAttempted || !model.hasLiveWorkers {
                         TextField("Switch IP address", text: $model.ounceCakeConsoleAddress)
                             .textFieldStyle(.roundedBorder).font(.system(size: 11)).frame(maxWidth: 240)
                         Text("Use the address in your Switch’s network settings, not this Mac’s address.")
-                            .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            .font(.system(size: 10)).foregroundStyle(Mac2jbTheme.muted).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer(minLength: 8)
-                Button(model.ounceCakeSession.hasStarted ? homebrewActionTitle : "Open game list") { model.launchOunceCake() }
+                Button(!canConfigure && model.ounceCakeSession.hasStarted ? homebrewActionTitle : "Open game list") { model.launchOunceCake() }
                     .font(.system(size: 11, weight: .medium)).disabled(!model.canLaunchOunceCake)
             }
             if model.ounceCakeSession.stage == .choosing {
@@ -548,7 +807,7 @@ struct ContentView: View {
                 }.font(.system(size: 12))
                 if let game = model.ounceCakeSession.games.first(where: { $0.titleId == model.selectedOunceCakeGame }) {
                     Text(game.titleId.uppercased() + " · " + game.storageDescription)
-                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(Mac2jbTheme.muted)
                 }
                 Button("Start FTP") { model.startOunceCakeFTP() }
                     .font(.system(size: 11, weight: .medium)).disabled(!model.canSelectOunceCakeGame)
@@ -565,7 +824,7 @@ struct ContentView: View {
                     Button("Copy FTP address") { model.copyOunceCakeAddress() }
                 }.font(.system(size: 11, design: .monospaced))
                 Text("No username or password · Binary transfer mode")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .font(.system(size: 10)).foregroundStyle(Mac2jbTheme.muted)
             }
         }
     }
@@ -578,18 +837,18 @@ struct ContentView: View {
                     Button("Cancel sign-in") { account.cancelSignIn() }
                 } else if account.signedIn {
                     Text(account.displayName.map { "Stremio: \($0)" } ?? "Signed in to Stremio")
-                    Text("\(account.libraryCount) library items").foregroundStyle(.secondary)
+                    Text("\(account.libraryCount) library items").foregroundStyle(Mac2jbTheme.muted)
                     Button("Refresh") { account.refresh() }
                     Button("Sign out") { account.signOut() }
                 } else {
                     Button("Sign in to Stremio") { account.signIn() }
-                    Text("Optional · account stays on this Mac").foregroundStyle(.secondary)
+                    Text("Optional · account stays on this Mac").foregroundStyle(Mac2jbTheme.muted)
                 }
             }
             .disabled(model.postRun.homebrewAttempted && model.hasLiveWorkers)
-            Text(account.status).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(account.status).foregroundStyle(Mac2jbTheme.muted).fixedSize(horizontal: false, vertical: true)
             if !account.watchProgressStatus.isEmpty {
-                Text(account.watchProgressStatus).foregroundStyle(.secondary)
+                Text(account.watchProgressStatus).foregroundStyle(Mac2jbTheme.muted)
             }
         }
         .font(.system(size: 10))
@@ -597,7 +856,7 @@ struct ContentView: View {
 
     private var homebrewActionTitle: String {
         switch model.postRun.homebrewStage {
-        case .idle: return "Launch HBLauncher"
+        case .idle: return "Launch GPUBrew"
         case .launching: return "Starting…"
         case .selecting: return "Choose a game"
         case .running: return "Running"
@@ -605,114 +864,134 @@ struct ContentView: View {
         }
     }
 
-    private var postRunControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Divider()
-            Text("4/4 verified · original instructions restored")
-                .font(.system(size: 12, weight: .semibold)).foregroundStyle(teal)
-            Text(model.phase == .dumpingFirmware
-                 ? "Keep SmileBASIC open until the dump finishes. Stop session may leave a partial dump."
-                 : "Keep SmileBASIC open until the host has finished final cleanup.")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
-            if !model.rpcCommand.isEmpty {
-                Text(model.rpcCommand).font(.system(size: 10, design: .monospaced))
-                    .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if !model.rpcStatus.isEmpty {
-                Text(model.rpcStatus).font(.system(size: 11)).foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            HStack(spacing: 12) {
-                Button(model.postRun.statusInFlight ? "Checking RPC…" : "Check RPC") { model.checkRPCStatus() }
-                    .disabled(!model.postRun.canCheckStatus)
-                Button("Copy RPC command") { model.copyRPCCommand() }.disabled(model.rpcCommand.isEmpty)
-                Button("Open run logs") { model.revealRunFolder() }
-                Spacer()
-                Button("Finish session") { model.finishPostRun() }.disabled(!model.postRun.canFinish)
-            }.font(.system(size: 11))
+    private var keyboardPanelOpen: Bool {
+        model.keyboardIsLoading || model.phase == .keyboardForwarding
+    }
+
+    private var expansionAnimation: Animation? {
+        reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.88)
+    }
+
+    private func scrollToKeyboardIfNeeded(_ proxy: ScrollViewProxy) {
+        if keyboardPanelOpen && showDeveloperOptions {
+            proxy.scrollTo("keyboard-controls", anchor: .center)
         }
     }
 
-    private var activity: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Button { showLogs.toggle() } label: {
-                    Label("Session activity", systemImage: showLogs ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                }.buttonStyle(.plain)
-                Spacer()
-                Button("Open session logs") { model.revealSessionFolder() }
-                    .font(.system(size: 11)).disabled(model.runtime == nil && model.diagnosticLogURL == nil)
-            }.foregroundStyle(.secondary)
-            if showLogs {
-                Picker("Activity log", selection: $activityTab) {
-                    Text("All activity").tag(0)
-                    Text("Host").tag(1)
-                    Text("USB & typing").tag(2)
-                }.pickerStyle(.segmented)
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        let selectedLog = activityTab == 1 ? model.hostLog : activityTab == 2 ? model.usbLog : model.log
-                        Text(selectedLog.isEmpty ? "Ready when you are. Session activity will appear here." : selectedLog)
-                            .font(.system(size: 10, design: .monospaced)).foregroundStyle(ink.opacity(0.8))
-                            .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(14)
-                        Color.clear.frame(height: 1).id("end")
+    private var toolsBubble: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                guard !showDeveloperOptions || !keyboardPanelOpen else { return }
+                showDeveloperOptions.toggle()
+            } label: {
+                HStack {
+                    Text("Console & Developer Options").font(.system(size: 12, weight: .semibold)).foregroundStyle(ink)
+                    Spacer()
+                    Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(teal).rotationEffect(.degrees(showDeveloperOptions ? 180 : 0))
+                        .animation(expansionAnimation, value: showDeveloperOptions)
+                }
+                .padding(.vertical, 4).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(showDeveloperOptions ? "Expanded" : "Collapsed")
+            .help(keyboardPanelOpen ? "Stop keyboard forwarding before closing this panel." : "Expand to show the console and developer tools")
+            VStack(alignment: .leading, spacing: 18) {
+                console
+                Divider().overlay(.white.opacity(0.04))
+                developerOptions
+            }
+            .padding(.top, 16)
+            .fixedSize(horizontal: false, vertical: true)
+            .background {
+                GeometryReader { content in
+                    Color.clear.preference(key: ToolsContentHeightKey.self, value: content.size.height)
+                }
+            }
+            .modifier(AnimatedExpansionLayout(height: showDeveloperOptions ? toolsContentHeight : 0))
+            .opacity(showDeveloperOptions ? 1 : 0)
+            .animation(expansionAnimation, value: showDeveloperOptions ? toolsContentHeight : 0)
+            .allowsHitTesting(showDeveloperOptions).disabled(!showDeveloperOptions)
+            .accessibilityHidden(!showDeveloperOptions)
+            .onPreferenceChange(ToolsContentHeightKey.self) { height in
+                if height.isFinite && height > 0 && abs(height - toolsContentHeight) > 0.5 {
+                    toolsContentHeight = height
+                }
+            }
+        }
+        .padding(20)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(.white.opacity(0.10), lineWidth: 1))
+        .shadow(color: .black.opacity(0.16), radius: 20, y: 8)
+    }
+
+    private var selectedConsoleLog: String {
+        activityTab == 1 ? model.hostLog : activityTab == 2 ? model.usbLog : model.log
+    }
+
+    private var console: some View {
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Text("Console").font(.system(size: 12, weight: .semibold)).foregroundStyle(ink)
+                    Picker("Console output", selection: $activityTab) {
+                        Text("All").tag(0)
+                        Text("Host").tag(1)
+                        Text("USB & typing").tag(2)
+                    }.pickerStyle(.segmented).labelsHidden().controlSize(.small).frame(width: 260)
+                    Spacer(minLength: 0)
+                    Button {
+                        followConsole.toggle()
+                        if followConsole { proxy.scrollTo("console-end", anchor: .bottom) }
+                    } label: {
+                        Image(systemName: followConsole ? "arrow.down.to.line.circle.fill" : "arrow.down.to.line.circle")
                     }
-                    .frame(height: 140)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 10))
-                    .onChange(of: model.log) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+                    .help(followConsole ? "Pause following new output" : "Follow new output")
+                    .accessibilityLabel("Follow console output")
+                    Button { model.revealSessionFolder() } label: { Image(systemName: "folder") }
+                        .help("Open session logs").accessibilityLabel("Open session logs")
+                        .disabled(model.runtime == nil && model.diagnosticLogURL == nil)
+                }.buttonStyle(.borderless).foregroundStyle(teal)
+                ScrollView {
+                    Text(selectedConsoleLog.isEmpty ? " " : selectedConsoleLog)
+                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(ink.opacity(0.8))
+                        .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                    Color.clear.frame(height: 1).id("console-end")
                 }
+                .frame(height: 128)
+                .background(.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
+                .onChange(of: selectedConsoleLog) { _, _ in
+                    if followConsole { proxy.scrollTo("console-end", anchor: .bottom) }
+                }
+                .onChange(of: activityTab) { _, _ in
+                    followConsole = true
+                    proxy.scrollTo("console-end", anchor: .bottom)
+                }
+                .onAppear { proxy.scrollTo("console-end", anchor: .bottom) }
             }
         }
     }
 
-    private var footer: some View {
-        if !model.shouldShowFirstTimeFooter { return AnyView(EmptyView()) }
-        return AnyView(HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "info.circle").padding(.top, 1)
-            Text("First time? Configure macOS to allow the unsigned driver, then use Install & load driver. Compatible custom SIP configurations are accepted. Approve and restart when prompted. No Xcode needed. The CLI remains available.")
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            Button("Setup guide ↗") {
-                NSWorkspace.shared.open(URL(string: "https://github.com/cpypwn/mac2jb#prerequisites")!)
-            }.buttonStyle(.plain).foregroundStyle(teal)
-        }.font(.system(size: 10)).foregroundStyle(.secondary))
-    }
-
-    private func modeCard(_ mode: SessionRunMode) -> some View {
-        Button { model.selectRunMode(mode) } label: {
-            HStack(alignment: .top, spacing: 10) {
-                Text("\(mode.number)").font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .frame(width: 23, height: 23).background(teal.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                VStack(alignment: .leading, spacing: 5) {
-                    Label(mode.title, systemImage: mode.icon).font(.system(size: 12, weight: .semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(mode.caption).font(.system(size: 11)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: model.runMode == mode ? "largecircle.fill.circle" : "circle").font(.system(size: 13))
-            }
-            .foregroundStyle(model.runMode == mode ? teal : ink)
-            .padding(15).frame(maxWidth: .infinity, alignment: .leading)
-            .background(model.runMode == mode ? teal.opacity(0.06) : .white, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(model.runMode == mode ? teal.opacity(0.6) : .gray.opacity(0.18), lineWidth: 1))
-        }.buttonStyle(.plain)
-    }
     private var powerDirectionNotice: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "cable.connector").foregroundStyle(teal).padding(.top, 2)
             VStack(alignment: .leading, spacing: 5) {
-                Text("USB enumeration requires the correct power direction.")
+                Text("The USB cable needs the right power direction.")
                     .font(.system(size: 11, weight: .semibold)).foregroundStyle(ink)
-                Text("The Mac must NOT be supplying power to the Switch. Unplug the cable from the Mac and plug it back in to renegotiate power toward the Mac. If the Switch is still charging from the Mac, reconnect and check again before retrying.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("The Switch should supply power to the Mac. If the Switch is charging from the Mac, unplug the USB-C cable from the Switch, wait about one second, then plug it back into the Switch. Check the power direction again before retrying.")
+                    .font(.system(size: 11)).foregroundStyle(Mac2jbTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(teal.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
     }
+    private func durationText(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "Estimating…" }
+        let total = Int(min(max(0, seconds), Double(Int.max / 60)))
+        return total >= 60 ? "\(total / 60) min \(total % 60) sec" : "\(total) sec"
+    }
+
     private func timingField(_ title: String, units: String, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
         HStack(spacing: 8) {
             Text(title).font(.system(size: 11)).foregroundStyle(ink)
@@ -725,17 +1004,12 @@ struct ContentView: View {
                 .frame(width: 20)
             Text(units).font(.system(size: 10)).frame(width: 21, alignment: .leading)
             Text("\(range.lowerBound)–\(range.upperBound)")
-                .font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                .font(.system(size: 9, design: .monospaced)).foregroundStyle(Mac2jbTheme.muted)
                 .frame(width: 80, alignment: .trailing)
         }
     }
-    private func eyebrow(_ text: String) -> some View {
-        Text(text).font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1).foregroundStyle(.secondary)
-    }
     private func panel<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        content().padding(22).frame(maxWidth: .infinity, alignment: .leading)
-            .background(.white, in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(ink.opacity(0.07), lineWidth: 1))
+        content().modifier(GlassPanel())
     }
     private func note(_ text: String, icon: String, color: Color) -> some View {
         HStack(alignment: .top, spacing: 10) { Image(systemName: icon); Text(text).fixedSize(horizontal: false, vertical: true) }
@@ -743,7 +1017,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, alignment: .leading).background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
     }
     private func loadDriver() {
-        guard let runtime = model.runtime else { return }
+        guard !driverSetupBlocked, let runtime = model.runtime else { return }
         model.driverSetupRunning = true
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -767,17 +1041,5 @@ struct ContentView: View {
         }
         do { try task.run() }
         catch { model.driverSetupRunning = false; driverMessage = error.localizedDescription }
-    }
-}
-
-private struct PrimaryActionStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(enabled ? Color.white : ink.opacity(0.4))
-            .frame(minWidth: 145, minHeight: 38)
-            .padding(.horizontal, 12)
-            .background(enabled ? teal.opacity(configuration.isPressed ? 0.8 : 1) : ink.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 }

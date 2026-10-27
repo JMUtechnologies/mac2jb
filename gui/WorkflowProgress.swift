@@ -15,6 +15,7 @@ struct WorkflowProgress: Equatable {
     private var awaitingSave = false
     private var terminal = false
     private(set) var selectedFullInstall = true
+    private(set) var bootstrapTypingWasSkipped = false
 
     func state(for index: Int) -> WorkflowStepState {
         guard states.indices.contains(index) else { return .pending }
@@ -31,6 +32,7 @@ struct WorkflowProgress: Equatable {
         selectedFullInstall = fullInstall
         terminal = false
         awaitingSave = false
+        bootstrapTypingWasSkipped = false
         activeStage = fullInstall ? .bootstrap : .run
         states = fullInstall ? [.complete, .active, .pending] : [.complete, .complete, .active]
     }
@@ -39,6 +41,13 @@ struct WorkflowProgress: Equatable {
         guard !terminal, activeStage == .bootstrap else { return }
         awaitingSave = true
         // Step 2 remains active through the save/Direct-mode checkpoint.
+    }
+
+    mutating func bootstrapTypingSkipped() {
+        guard !terminal, activeStage == .bootstrap else { return }
+        bootstrapTypingWasSkipped = true
+        awaitingSave = true
+        // This records the user's existing PRG0 program, not a USB transfer.
     }
 
     mutating func confirmSavedAndStartHost() {
@@ -59,6 +68,13 @@ struct WorkflowProgress: Equatable {
         guard !terminal, activeStage == .run else { return }
         terminal = true
         states = [.complete, .complete, .complete]
+    }
+
+    mutating func commandsOnlySent() {
+        guard !terminal, activeStage == .run else { return }
+        terminal = true
+        // Keyboard delivery provides no execution or cleanup verification.
+        states = [.complete, .complete, .pending]
     }
 
     mutating func fail() { stop() }

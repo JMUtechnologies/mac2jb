@@ -9,7 +9,7 @@ import Foundation
             print("PASS " + name)
         }
         let upstream = "The run stopped. Keep the runs folder and restart the console before trying again."
-        for phase in [SessionPhase.hostStarting, .commands, .waitingForConsole] {
+        for phase in [SessionPhase.hostStarting, .commands, .commandsSent, .waitingForConsole] {
             check(SessionRecovery.message(upstream, interruptedPhase: phase) == upstream,
                   "\(phase): upstream restart instruction is not repeated")
             let cancelled = SessionRecovery.message("Session stopped.", interruptedPhase: phase)
@@ -25,6 +25,14 @@ import Foundation
                   "bootstrap failure/cancellation asks to clear partial bootstrap")
             check(SessionRecovery.message(recovery, interruptedPhase: .bootstrap) == recovery,
                   "bootstrap guidance is not repeated")
+        }
+        for message in ["The save command stopped.", "Session stopped."] {
+            let recovery = SessionRecovery.message(message, interruptedPhase: .savingBootstrap)
+            check(recovery.contains("clear any partial save command") && recovery.contains("Check whether NS2 was saved") &&
+                  !recovery.contains("partial bootstrap") && !recovery.contains("Restart the console"),
+                  "SAVE failure/cancellation requires inspecting Direct mode and saved state before resending")
+            check(SessionRecovery.message(recovery, interruptedPhase: .savingBootstrap) == recovery,
+                  "partial SAVE guidance is not repeated")
         }
         for phase in [SessionPhase.preparing, .ready, .awaitingSave, .verified, .failed, .cancelled] {
             check(SessionRecovery.message("Session stopped.", interruptedPhase: phase) == "Session stopped.",

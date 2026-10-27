@@ -83,10 +83,16 @@ test('account library fetches the saved episode and sends exact resume identity 
   assert.deepEqual(plays[0].libraryInfo.videoIds, ['show:7:1:1', 'show:7:1:2']);
   assert.ok(routes.includes('/stream/series/show%3A7%3A1%3A2.json'));
   controller.setPlaybackInfo({position: 72, duration: 120});
-  await controller.handleButton('b'); await controller.handleButton('b'); await controller.handleButton('b');
+  await controller.handleButton('b'); // Hide playback controls before stopping.
+  await controller.handleButton('b'); await controller.handleButton('b'); await controller.handleButton('b'); await controller.handleButton('b');
   assert.match(controller.getMenuModel().rows[0].label, /Resume at 1:12/);
   await controller.handleButton('down'); await controller.handleButton('a');
-  await controller.handleButton('a'); await controller.handleButton('a');
+  assert.equal(controller.getMenuModel().view, 'episodes');
+  assert.equal(controller.getMenuModel().rows[controller.selected].id, 'show:7:1:2');
+  await controller.handleButton('b');
+  assert.equal(controller.getMenuModel().view, 'seasons');
+  assert.equal(controller.getMenuModel().rows[controller.selected].season, 1);
+  await controller.handleButton('a'); await controller.handleButton('a'); await controller.handleButton('a');
   assert.equal(plays[1].resumePosition, 0);
   assert.equal(plays[1].libraryInfo.videoId, 'show:7:1:1');
   controller.setPlaybackInfo({position: 120, duration: 120}); controller.playbackEnded();

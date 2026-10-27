@@ -1,10 +1,11 @@
 import Foundation
 
 enum SessionPhase: String {
-    case preparing, ready, bootstrap, awaitingSave, hostStarting, commands
-    case waitingForConsole, rpcHeld, dumpingFirmware, rpcFinishing
+    case preparing, ready, bootstrap, awaitingSave, savingBootstrap, hostStarting, commands
+    case waitingForConsole, rpcAttaching, rpcHeld, rpcDetached, dumpingFirmware, rpcFinishing
     case launchingHomebrew, homebrewRunning, homebrewStopped
-    case verified, failed, cancelled
+    case keyboardConnecting, keyboardForwarding
+    case verified, commandsSent, failed, cancelled
 }
 
 enum SessionRecovery {
@@ -16,7 +17,12 @@ enum SessionRecovery {
         case .bootstrap:
             guard message.range(of: "partial bootstrap", options: .caseInsensitive) == nil else { return message }
             return append("Clear any partial bootstrap before typing again.", to: message)
-        case .hostStarting, .commands, .waitingForConsole:
+        case .savingBootstrap:
+            guard message.range(of: "partial save command", options: .caseInsensitive) == nil else { return message }
+            return append("Inspect Direct mode and clear any partial save command before trying again. Check whether NS2 was saved before resending the command.", to: message)
+        case .keyboardConnecting, .keyboardForwarding:
+            return append("Keyboard forwarding stopped. Reconnect the USB cable if a key repeats.", to: message)
+        case .hostStarting, .commands, .commandsSent, .waitingForConsole:
             return addingRestart(to: message, liveSession: false)
         case .dumpingFirmware:
             let partialDump = #"(?i)\bpartial(?:\s+(?:system[- ]code|firmware))?\s+dump\b"#

@@ -2,13 +2,20 @@
   "format": "hblauncher.gpu-app",
   "abi": 1,
   "id": "stremio-experimental",
-  "name": "Stremio experimental media display",
-  "version": "0.1.0",
-  "description": "Mac-assisted BC1 video display and controller input",
+  "name": "Stremio media display",
+  "version": "0.4.0",
+  "description": "Mac-assisted 720p menus and video with controller, timeline drag and subtitle display",
   "transition": "none",
-  "shaders": {"vertex": "app.vert.spv", "fragment": "app.frag.spv", "compute": "app.comp.spv"},
+  "shaders": {
+    "vertex": "app.vert.spv",
+    "fragment": "app.frag.spv",
+    "compute": "app.comp.spv"
+  },
   "initialState": "state.bin",
   "data": "data.bin",
   "icon": "icon.png",
-  "memory": {"bytes": 102400, "initial": "media.bin"}
+  "memory": {
+    "bytes": 3149824,
+    "initial": "media.bin"
+  }
 }

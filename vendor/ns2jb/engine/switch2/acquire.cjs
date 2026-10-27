@@ -14,15 +14,24 @@ async function start() {
   const MAX_ATTEMPTS = 3;
   let lastError;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; ++attempt) {
+    if (attempt > 0) {
+      try {
+        await require('./cleanup-scratch.cjs').main();
+      } catch {
+        // Continue if session or cleanup was transiently unavailable
+      }
+    }
     const logFile = path.join(__dirname, 'acquisition.log');
 
-    try {
-      await fs.promises.unlink(logFile);
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
+    if (attempt === 0) {
+      try {
+        await fs.promises.unlink(logFile);
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+      }
     }
 
-    const log = fs.createWriteStream(logFile, { flags: 'wx', mode: 0o600 });
+    const log = fs.createWriteStream(logFile, { flags: attempt === 0 ? 'wx' : 'a', mode: 0o600 });
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
     const child = spawn(process.execPath, [path.join(__dirname, 'memory/probe-reserved-gap.cjs')],
       { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
@@ -45,13 +54,19 @@ async function start() {
     try {
       const deadline = Date.now() + 10 * 60 * 1000;
       let report, recorded = false;
+// AFTER in acquire.cjs
       for (; ;) {
         if (reportFile) {
-          report = await read(reportFile);
-          if (!recorded) {
-            // Keep the scratch owner discoverable even if acquisition later fails.
-            await save(path.join(__dirname, 'current-acquisition.json'), { session: a.session, report: reportFile });
-            recorded = true;
+          try {
+            report = await read(reportFile);
+            if (!recorded) {
+              // Keep the scratch owner discoverable even if acquisition later fails.
+              await save(path.join(__dirname, 'current-acquisition.json'), { session: a.session, report: reportFile });
+              recorded = true;
+            }
+          } catch {
+            // Transient read/parse collision while report is being saved on Windows.
+            // Safe to ignore and retry on the next 500ms tick.
           }
         }
         if (report?.memoryControl?.ready) break;
@@ -91,7 +106,15 @@ async function start() {
           return { cleanedUp: true, report: reportFile };
         },
       };
-    } catch (error) { await abandon(); lastError = error; }
+    } catch (error) {
+      await abandon();
+      lastError = error;
+      const report = reportFile ? await read(reportFile).catch(() => null) : null;
+      if (report?.error?.includes('timed out') || error.message.includes('timed out') ||
+          report?.error?.includes('connection is not ready') || error.message.includes('connection is not ready')) {
+        break;
+      }
+    }
     if (attempt < MAX_ATTEMPTS - 1) await delay(1000);
   }
   throw lastError;

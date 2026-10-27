@@ -15,12 +15,12 @@ source files. Root `LICENSE` does not override third-party terms.
   provenance README and APSL text. The unused `usb_device/` proof of concept,
   upstream convenience shell scripts, prebuilt `usbgadget.kext/`, and machine-local
   Xcode user settings are excluded. This is not a byte-for-byte upstream tree.
-- ns2jb: the `kurumuz` fork, based on pepsipu's
+- ns2jb: the `BermTheSequel/ns2jb2` fork, based on pepsipu's
   original project, replaces the previous runtime. Its complete snapshot and
   tests are pinned in `upstream.lock`. All runtime, exploit, and test files are
   unchanged. `SHA256SUMS` is regenerated over the actual snapshot because the
-  fork's manifest has 14 stale hashes and omits added files. Its original
-  manifest is retained in `packaging/ns2jb-eb2bdec-SHA256SUMS.upstream`.
+  fork's supplied manifest is retained separately. Its original
+  manifest is retained in `packaging/ns2jb-8461942-SHA256SUMS.upstream`.
   `assets/bootstrap.bas` is copied byte for byte from the fork, including its
   five-argument START interface. `scripts/prepare-bootstrap.cjs` copies and
   checks that exact asset; no compatibility transformation is applied. The

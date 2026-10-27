@@ -276,8 +276,12 @@ test('firmware dumps use a dedicated directory and clear only marked prior dumps
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.ns2jb-firmware-dump.json'))).kind,
     'ns2jb-system-code-dump');
   fs.rmSync(root, {recursive: true});
-  fs.symlinkSync(base, root);
-  await assert.rejects(prepareDumpDirectory(root), /symlink/);
+  try {
+    fs.symlinkSync(base, root);
+    await assert.rejects(prepareDumpDirectory(root), /symlink/);
+  } catch (err) {
+    if (err.code !== 'EPERM') throw err;
+  }
 });
 
 test('the engine has only local or Node dependencies, all present in the package', () => {
@@ -298,7 +302,7 @@ test('the engine has only local or Node dependencies, all present in the package
       if (!dependency.startsWith('.')) {
         assert.ok(dependency.startsWith('node:'), name + ': external dependency ' + dependency);
       } else {
-        const relative = path.relative(root, path.resolve(root, path.dirname(name), dependency));
+        const relative = path.relative(root, path.resolve(root, path.dirname(name), dependency)).replace(/\\/g, '/');
         assert.ok(present.has(relative) || generated.has(relative), name + ': missing ' + relative);
       }
     }

@@ -116,6 +116,27 @@ private func expect(_ progress: WorkflowProgress, _ expected: [WorkflowStepState
                 progress.begin(fullInstall: false); progress.complete()
                 try expect(progress, [.complete, .complete, .complete], "NS2-only verified")
             }),
+            ("commands-only delivery never completes host verification", {
+                var progress = WorkflowProgress()
+                progress.commandsOnlySent()
+                try expect(progress, [.active, .pending, .pending], "delivery before begin ignored")
+                progress.begin(fullInstall: false); progress.commandsOnlySent()
+                try expect(progress, [.complete, .complete, .pending], "commands delivered without a host")
+                progress.complete()
+                try expect(progress, [.complete, .complete, .pending], "late callback cannot invent host verification")
+            }),
+            ("typing Skip records an existing program without completing its save", {
+                var progress = WorkflowProgress()
+                progress.bootstrapTypingSkipped()
+                guard !progress.bootstrapTypingWasSkipped else { throw Failure(description: "Skip before begin was accepted") }
+                progress.begin(fullInstall: true); progress.bootstrapTypingSkipped()
+                guard progress.bootstrapTypingWasSkipped else { throw Failure(description: "Skip milestone missing") }
+                try expect(progress, [.complete, .active, .pending], "existing PRG0 still awaits save confirmation")
+                progress.bootstrapOnlySaved()
+                try expect(progress, [.complete, .complete, .pending], "saved existing PRG0 never verifies an exploit")
+                progress.begin(fullInstall: false); progress.bootstrapTypingSkipped()
+                guard !progress.bootstrapTypingWasSkipped else { throw Failure(description: "Skip leaked into another workflow") }
+            }),
             ("preparation failure and cancellation are step 1 failures until retry", {
                 var progress = WorkflowProgress()
                 progress.cancel()

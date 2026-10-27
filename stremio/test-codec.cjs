@@ -21,9 +21,16 @@ test('media input rejects command-style values and header injection',()=>{
 });
 test('real FFmpeg decodes a generated HTTP video into matched frames and PCM without console access',async t=>{
  let tools;try{tools=await decoder.tools();}catch{t.skip('Install Stremio to run the real decoder check.');return;}const directory=await fs.mkdtemp(path.join(os.tmpdir(),'mac2jb-stremio-media-'));t.after(()=>fs.rm(directory,{recursive:true,force:true}));
- const file=path.join(directory,'test.mp4');await run(tools.ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=15','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','1.23','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-movflags','faststart',file]);
+ const file=path.join(directory,'test.mp4');await run(tools.ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=1280x720:rate=15','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','1.23','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-movflags','faststart',file]);
  const bytes=await fs.readFile(file),server=http.createServer((req,res)=>{res.writeHead(200,{'content-type':'video/mp4','content-length':bytes.length});res.end(bytes);});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
- let frames=0,audio=0;const stream=await decoder.create({url:'http://127.0.0.1:'+server.address().port+'/test.mp4'},{onVideo:async frame=>{assert.equal(codec.encode(frame,320,180).length,28800);frames++;},onAudio:async pcm=>{assert.equal(pcm.length,19200);audio++;}});
- await stream.done;assert.ok(frames>=18&&frames<=20,'frames='+frames);assert.ok(audio>=12&&audio<=14,'audio='+audio);assert.equal(stream.info.hasAudio,true);
+ for(const quality of ['720p','540p']){
+  const profile=require('./quality.cjs').qualityProfile(quality);let frames=0,audio=0;
+  const stream=await decoder.create({url:'http://127.0.0.1:'+server.address().port+'/test.mp4'},{quality,onVideo:async(frame,info)=>{
+   assert.equal(info.width,profile.width);assert.equal(info.height,profile.height);
+   assert.equal(codec.encode(frame,profile.width,profile.height).length,codec.dimensions(profile.width,profile.height));frames++;
+  },onAudio:async pcm=>{assert.equal(pcm.length,19200);audio++;}});
+  await stream.done;assert.ok(frames>=18&&frames<=20,'frames='+frames);assert.ok(audio>=12&&audio<=14,'audio='+audio);
+  assert.equal(stream.info.hasAudio,true);assert.equal(stream.info.sourceWidth,1280);assert.equal(stream.info.sourceHeight,720);
+ }
 });

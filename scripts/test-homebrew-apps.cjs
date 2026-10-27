@@ -25,14 +25,16 @@ test('the overlay is the exact released ftpd-sb v0.1.0 app and retains its upstr
   assert.match(fs.readFileSync(path.join(app.directory, 'README.md'), 'utf8'), /No blanket license\s+has been assigned to this package/);
 });
 
-test('installs an exact overlay without changing the upstream app or integrity manifest', t => {
-  const f = fixture(t), apps = path.join(f.root, 'runtime/vendor/HBLauncher/apps');
-  fs.cpSync(path.join(repository, 'vendor/HBLauncher/apps/hello-world'), path.join(apps, 'hello-world'), {recursive: true});
-  const hello = fs.readFileSync(path.join(apps, 'hello-world/app.json'));
-  const upstreamManifest = fs.readFileSync(path.join(repository, 'packaging/HBLauncher-v0.2.0-SHA256SUMS'));
+for (const launcher of ['HBLauncher', 'GPUBrewLauncher']) test(launcher+' installs an exact overlay without changing upstream apps or integrity manifest', t => {
+  const f = fixture(t), apps = path.join(f.root, 'runtime/vendor', launcher, 'apps');
+  fs.cpSync(path.join(repository, 'vendor', launcher, 'apps'), apps, {recursive: true});
+  const originals = fs.readdirSync(apps).sort().map(name => [name, fs.readFileSync(path.join(apps, name, 'app.json'))]);
+  const manifest = path.join(repository, 'packaging', launcher+(launcher === 'HBLauncher' ? '-v0.2.0' : '')+'-SHA256SUMS');
+  const upstreamManifest = fs.readFileSync(manifest);
   assert.deepEqual(installOverlays(f.root, apps), ['ftpd-sb']);
-  assert.deepEqual(fs.readFileSync(path.join(apps, 'hello-world/app.json')), hello);
-  assert.deepEqual(fs.readFileSync(path.join(repository, 'packaging/HBLauncher-v0.2.0-SHA256SUMS')), upstreamManifest);
+  for (const [name, bytes] of originals) assert.deepEqual(fs.readFileSync(path.join(apps, name, 'app.json')), bytes);
+  assert.deepEqual(fs.readdirSync(apps).sort(), [...originals.map(([name]) => name), 'ftpd-sb'].sort());
+  assert.deepEqual(fs.readFileSync(manifest), upstreamManifest);
   for (const name of verifyOverlay(f.root).manifest.keys())
     assert.deepEqual(fs.readFileSync(path.join(apps, 'ftpd-sb', name)), fs.readFileSync(path.join(f.app, name)));
 });

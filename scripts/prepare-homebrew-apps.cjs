@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Install application overlays after copying the unchanged HBLauncher snapshot.
+// Install application overlays after copying an unchanged launcher snapshot.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -87,7 +87,7 @@ function installOverlays(root, appsDirectory) {
   for (const name of entries) {
     check(/^[a-z0-9][a-z0-9-]{0,47}$/.test(name), 'Invalid homebrew app overlay name: ' + name);
     tree(path.join(overlays, name));
-    try {fs.lstatSync(path.join(appsDirectory, name)); throw Error('Refusing to overwrite an existing HBLauncher app: ' + name);}
+    try {fs.lstatSync(path.join(appsDirectory, name)); throw Error('Refusing to overwrite an existing launcher app: ' + name);}
     catch (error) {if (error.code !== 'ENOENT') throw error;}
   }
   for (const name of entries)

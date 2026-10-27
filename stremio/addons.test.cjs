@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const {AddonClient, AddonCollection, requestJSON, normalizeStream, manifestURL, redactText, DEFAULT_ADDON_URL} = require('./addons.cjs');
+const {AddonClient, AddonCollection, requestJSON, normalizeMeta, normalizeStream, normalizeSubtitle, subtitleExtras, manifestURL, redactText, DEFAULT_ADDON_URL} = require('./addons.cjs');
 
 async function server(t, handler) {
   const instance = http.createServer(handler);
@@ -74,11 +74,103 @@ test('unsupported stream types and unsafe headers never become executable playba
   assert.equal(/password|APISECRET|TOKEN|key=SECRET/.test(redacted), false);
 });
 
+test('visual metadata is bounded and artwork keeps only HTTP(S) URLs without embedded credentials', () => {
+  const meta = normalizeMeta({id: 'fixture:movie', type: 'movie', name: 'Fixture',
+    poster: 'https://images.example.invalid/poster.jpg', background: 'https://images.example.invalid/scene.jpg#fragment',
+    logo: 'https://images.example.invalid/logo.png', posterShape: 'landscape',
+    genres: ['Drama', 'Science\nfiction', ...Array(12).fill('x'.repeat(80))], runtime: '94 min', imdbRating: '8.2'});
+  assert.equal(meta.background, 'https://images.example.invalid/scene.jpg');
+  assert.equal(meta.logo, 'https://images.example.invalid/logo.png');
+  assert.equal(meta.posterShape, 'landscape');
+  assert.equal(meta.genres.length, 8); assert.equal(meta.genres[1], 'Science fiction');
+  assert.equal(meta.genres.at(-1).length, 48);
+  assert.equal(meta.runtime, '94 min'); assert.equal(meta.rating, '8.2');
+  for (const value of ['file:///private/picture.jpg', 'https://user:secret@example.invalid/picture.jpg',
+    'https://images.example.invalid/' + 'x'.repeat(2048), 'https://images.example.invalid/' + '界'.repeat(300)]) {
+    const unsafe = normalizeMeta({id: 'fixture:movie', type: 'movie', background: value, logo: value,
+      posterShape: 'unknown', genres: 'Drama', runtime: {}, rating: {value: 8}});
+    assert.equal(unsafe.background, undefined); assert.equal(unsafe.logo, undefined);
+    assert.equal(unsafe.posterShape, 'poster'); assert.deepEqual(unsafe.genres, []);
+    assert.equal(unsafe.runtime, ''); assert.equal(unsafe.rating, '');
+  }
+  assert.equal(normalizeMeta({id: 'fixture:movie', type: 'movie', rating: 8.5}).rating, '8.5');
+});
+
 test('one malformed addon does not hide a valid provider', async t => {
   const base = await server(t, (_, response) => response.end(JSON.stringify({id: 'working', types: ['movie'], resources: ['catalog'],
     catalogs: [{id: 'working', type: 'movie'}]})));
   const collection = await new AddonCollection({addonUrls: ['invalid-url', base + '/manifest.json']}).init();
   assert.equal(collection.errors.length, 1); assert.equal(collection.catalogs().length, 1);
+});
+
+test('subtitle addon routes preserve exact episode IDs, bounded extras and query authentication', async t => {
+  const seen = [], logs = [];
+  const base = await server(t, (request, response) => {
+    const url = new URL(request.url, 'http://fixture'); seen.push(url);
+    response.setHeader('content-type', 'application/json');
+    if (url.pathname.endsWith('/manifest.json')) response.end(JSON.stringify({id: 'same-provider', name: 'Subtitle fixture', types: ['series'],
+      idPrefixes: ['tt'], resources: ['subtitles'], catalogs: []}));
+    else response.end(JSON.stringify({subtitles: [
+      {id: 'en-1', lang: 'eng', url: base + '/english.srt?key=SUBTITLESECRET'},
+      {id: 'en-1', lang: 'eng', url: base + '/duplicate.srt'},
+      {id: 'en-cc', lang: 'eng', label: 'English [CC]', url: base + '/captions.vtt'},
+      {id: 'unsafe', lang: 'eng', url: 'file:///private/subtitles.srt'},
+      {id: 'credentials', lang: 'eng', url: 'https://user:secret@fixture.invalid/file.srt'},
+      {lang: 'eng', url: base + '/no-id.srt'}
+    ]}));
+  });
+  const collection = await new AddonCollection({addonUrls: [base + '/a/manifest.json?key=FIRSTSECRET', base + '/b/manifest.json?key=SECONDSECRET'],
+    onLog: message => logs.push(message)}).init();
+  const extras = {videoHash: '0123456789abcdef', videoSize: 4096, filename: 'Show S01 & title.mkv', ignored: 'NOTFORWARDED'};
+  const tracks = await collection.subtitles('series', 'tt123456:1/2', extras);
+  assert.equal(tracks.length, 4); assert.equal(new Set(tracks.map(track => track.id)).size, 4);
+  assert.equal(tracks[0].remoteId, 'en-1'); assert.equal(tracks[0].label, 'English');
+  assert.equal(tracks[1].label, 'English [CC]'); assert.equal(tracks[0].addonName, 'Subtitle fixture');
+  assert.equal(tracks[0].url, base + '/english.srt?key=SUBTITLESECRET');
+  assert.deepEqual((await collection.subtitles('series', 'tt123456:1/2', extras)).map(track => track.id), tracks.map(track => track.id));
+  for (const url of seen.filter(url => url.pathname.includes('/subtitles/'))) {
+    assert.match(url.pathname, /\/subtitles\/series\/tt123456%3A1%2F2\/videoHash=0123456789abcdef&videoSize=4096&filename=Show%20S01%20%26%20title.mkv\.json$/);
+    assert.ok(['FIRSTSECRET', 'SECONDSECRET'].includes(url.searchParams.get('key')));
+    assert.ok(!url.href.includes('NOTFORWARDED'));
+  }
+  const before = seen.length;
+  assert.deepEqual(await collection.subtitles('movie', 'tt123456'), []);
+  assert.deepEqual(await collection.subtitles('series', 'unrelated:1:2'), []);
+  assert.equal(seen.length, before);
+  assert.ok(logs.every(message => !/FIRSTSECRET|SECONDSECRET|SUBTITLESECRET/.test(message)));
+});
+
+test('resource-specific rules override manifest prefixes while catalogs remain discoverable', async () => {
+  const manifest = {id: 'fixture', name: 'Fixture', types: ['series'], idPrefixes: ['tt'], catalogs: [], resources: [
+    {name: 'subtitles', types: ['series'], idPrefixes: ['episode:']}, 'catalog',
+    {name: 'meta', types: ['series']}
+  ]};
+  const client = await new AddonClient('https://fixture.invalid/manifest.json',
+    {fetchImpl: async () => new Response(JSON.stringify(manifest))}).init();
+  assert.equal(client.supports('subtitles', 'series', 'episode:1:2'), true);
+  assert.equal(client.supports('subtitles', 'series', 'tt1'), false);
+  assert.equal(client.supports('subtitles', 'movie', 'episode:1'), false);
+  assert.equal(client.supports('catalog', 'series', 'all'), true);
+  assert.equal(client.supports('meta', 'series', 'any'), true);
+  assert.equal(client.supports('subtitles', 'series', {}), false);
+});
+
+test('subtitle normalization and metadata reject unsafe values; collection bounds partial providers', async () => {
+  assert.equal(normalizeSubtitle({id: 'x', lang: 'eng', url: 'https://fixture.invalid/subtitle.srt'}, 'Provider').lang, 'eng');
+  for (const raw of [{id: 'x', lang: {}, url: 'https://fixture.invalid/file.srt'},
+    {id: 'x', lang: ' ', url: 'https://fixture.invalid/file.srt'},
+    {id: 'x\nsecret', lang: 'eng', url: 'https://fixture.invalid/file.srt'},
+    {id: 'x', lang: 'eng', url: 'https://fixture.invalid/' + '界'.repeat(1000)},
+    {id: 'x', lang: 'eng', url: 'javascript:alert(1)'}]) assert.equal(normalizeSubtitle(raw, 'Provider'), null);
+  assert.deepEqual(subtitleExtras({videoSize: 42, ignored: 'private'}), {videoSize: 42});
+  for (const extras of [{videoHash: 'invalid'}, {videoSize: '42'}, {videoSize: Infinity}, {filename: '\nprivate'}, []])
+    assert.throws(() => subtitleExtras(extras), /invalid/);
+  const collection = new AddonCollection();
+  collection.clients = [{supports: () => true, subtitles: async () => { throw Error('secret provider error'); }},
+    {supports: () => true, subtitles: async () => Array.from({length: 250}, (_, index) => ({id: String(index)}))}];
+  assert.equal((await collection.subtitles('movie', 'tt123')).length, 200);
+  collection.clients.pop();
+  await assert.rejects(collection.subtitles('movie', 'tt123'), error => /providers could not return/.test(error.message) && !error.message.includes('secret'));
 });
 
 module.exports = {server};

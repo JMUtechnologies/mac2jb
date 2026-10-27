@@ -2,10 +2,15 @@
 const fs=require('node:fs/promises'),path=require('node:path'),{spawn}=require('node:child_process');
 const {performance}=require('node:perf_hooks');
 const P=require('./protocol.cjs');
-const root=path.resolve(__dirname,'..'),HBL=path.join(root,'vendor/HBLauncher');
-const code=require('../vendor/HBLauncher/smilebasic/engine/switch2/app/thread-code.json').functions;
-const timing=require('../vendor/HBLauncher/smilebasic/engine/switch2/app/timing-code.json').functions;
+const root=path.resolve(__dirname,'..'),GPUB=path.join(root,'vendor/GPUBrewLauncher');
+const code=require('../vendor/GPUBrewLauncher/smilebasic/engine/switch2/app/thread-code.json').functions;
+const timing=require('../vendor/GPUBrewLauncher/smilebasic/engine/switch2/app/timing-code.json').functions;
 const check=(condition,message)=>{if(!condition)throw Error(message);};
+function selectTransportMode(mode,packetBytes){
+  check(['auto','rpc','dedicated'].includes(mode),'Invalid media transport mode');
+  check(Number.isInteger(packetBytes)&&packetBytes>0&&packetBytes<=P.SLOT_BYTES,'Invalid media packet size');
+  return mode==='auto'?(packetBytes<=P.WRITE_BYTES?'rpc':'dedicated'):mode;
+}
 const struct=(size,type,words={},pointers={})=>{
   const bytes=Buffer.alloc(size);bytes.writeUInt32LE(type);
   for(const [offset,value]of Object.entries(words))bytes.writeUInt32LE(value,+offset);
@@ -13,13 +18,36 @@ const struct=(size,type,words={},pointers={})=>{
   return bytes;
 };
 async function readJSON(file){return JSON.parse(await fs.readFile(file,'utf8'));}
+async function writeChunks(rpc,address,bytes){
+  for(let offset=0;offset<bytes.length;offset+=P.WRITE_BYTES)
+    await rpc.write(address+offset,bytes.subarray(offset,offset+P.WRITE_BYTES));
+}
+async function qualifyInputs({rpc,inspection,controls,mapped,control,verified}){
+  check(inspection.session===rpc.a.session,'Input belongs to another session');
+  const inputs=[];
+  async function qualify(entry,label){
+    check(Number((await rpc.read(rpc.a.main+entry.slot,8)).readBigUInt64LE())===entry.target,label+' import changed');
+    await rpc.request({command:'verify-function',address:entry.target,hex:entry.bytes.slice(0,64)});verified.add(entry.target);
+  }
+  for(const [index,kind]of ['Handheld','FullKey','JoyDual','JoyLeft','JoyRight'].entries()){
+    const match=Object.entries(inspection.imports).find(([name])=>name.includes('GetNpadState')&&name.includes('Npad'+kind+'State'));
+    if(!match?.[1]?.bytes){check(index!==0,'Required handheld input is missing');continue;}
+    await qualify(match[1],'Controller');
+    inputs.push({address:match[1].target,args:[index===0?controls:mapped+2048+(index-1)*64,control+(index===0?0x230:0x234)]});
+  }
+  // verified import and output offsets from the bundled launcher loop.
+  const touch=inspection.imports['_ZN2nn3hid19GetTouchScreenStateILm16EEEvPNS0_16TouchScreenStateIXT_EEE'];
+  check(touch?.bytes,'Required touchscreen input is missing');await qualify(touch,'Touchscreen');
+  inputs.push({address:touch.target,args:[controls+P.TOUCH_OFFSET]});
+  return {inputs,touch:{target:touch.target,offset:P.TOUCH_OFFSET,width:P.MENU_WIDTH,height:P.MENU_HEIGHT}};
+}
 async function setup(directory,onProgress){
   const scripts=require('../scripts/gui-homebrew.cjs').stages;
   for(const [script,...args]of scripts){
     onProgress('Preparing '+script);
     await new Promise((resolve,reject)=>{
-      const child=spawn(process.execPath,[path.join(HBL,script),directory,...args],{
-        cwd:HBL,env:require('../scripts/gui-homebrew.cjs').runtimeEnvironment(root),stdio:['ignore','pipe','pipe']});
+      const child=spawn(process.execPath,[path.join(GPUB,script),directory,...args],{
+        cwd:GPUB,env:require('../scripts/gui-homebrew.cjs').runtimeEnvironment(root),stdio:['ignore','pipe','pipe']});
       let output='',timedOut=false,killTimer;
       for(const stream of [child.stdout,child.stderr])stream.on('data',bytes=>{output=(output+bytes.toString()).slice(-65536);});
       const timer=setTimeout(()=>{
@@ -72,11 +100,17 @@ function frameCalls({sdk,control,semaphore,resources,commands,functions,inputs,l
 }
 async function create({rpc,directory,appDirectory=path.join(__dirname,'app'),onProgress=()=>{}}){
   check(path.isAbsolute(directory)&&path.isAbsolute(appDirectory),'Graphics requires absolute owned session/app paths');
+  // keep setup writes within the same native transfer limit.
+  const nativeRpc=Object.create(rpc);nativeRpc.write=(address,bytes)=>writeChunks(rpc,address,bytes);
   const file=path.join(directory,'stremio-graphics.json');
   await fs.writeFile(file,'{}',{flag:'wx',mode:0o600});
   const report={session:rpc.a.session,started:new Date().toISOString(),resourcesRetained:true};
   const save=()=>fs.writeFile(file,JSON.stringify(report,null,2)+'\n',{mode:0o600});
-  let thread=null,program,transport,closed=false,base,checks;
+  let thread=null,program,transport,receiver,receiverStop,closed=false,base,checks,transportMode='auto',publications=0,threadUncertain=false;
+  function abortPending(){
+    if(receiver&&!receiverStop){receiverStop=receiver.close();receiverStop.catch(()=>{});}
+    return receiverStop||Promise.resolve();
+  }
   async function stopWorker(){
     if(thread===null)return;
     await program.stop();const deadline=Date.now()+10000;let done=false;
@@ -97,14 +131,14 @@ async function create({rpc,directory,appDirectory=path.join(__dirname,'app'),onP
     check(menu.session===rpc.a.session&&menu.ready&&menu.scratchRestored&&qualified.session===rpc.a.session&&
       qualified.passed&&qualified.scratchRestored,'Graphics preparation belongs to another or incomplete session');
     onProgress('Preparing the Stremio media display');
-    const app=await require('../vendor/HBLauncher/homebrew-launcher/app-catalog.cjs').readApp(appDirectory);
+    const app=await require('../vendor/GPUBrewLauncher/homebrew-launcher/app-catalog.cjs').readApp(appDirectory);
     check(app.id==='stremio-experimental'&&app.files.memory?.allocationBytes===P.MEMORY_BYTES,'Unexpected media package layout');
-    const gpu=await require('../vendor/HBLauncher/homebrew-launcher/gpu-app.cjs').prepare(rpc,menu,app,directory);
+    const gpu=await require('../vendor/GPUBrewLauncher/homebrew-launcher/gpu-app.cjs').prepare(nativeRpc,menu,app,directory);
     check(gpu.ready&&gpu.scratchRestored&&gpu.privateStorage?.bytes===P.MEMORY_BYTES,'Media graphics did not verify');
     const mapped=gpu.privateStorage.mapped;
     check(Number.isSafeInteger(mapped)&&mapped>0,'Invalid owned media buffer');
     report.mapped=mapped;report.bytes=P.MEMORY_BYTES;
-    await rpc.write(mapped,P.initialMemory());
+    await writeChunks(rpc,mapped,P.initialMemory());
     const benchmark=Buffer.alloc(32768,0xa5),benchmarkAddress=mapped+P.HEADER_BYTES+2*P.SLOT_BYTES;
     const started=performance.now();await rpc.write(benchmarkAddress,benchmark);
     report.benchmark={uploadBytes:benchmark.length,uploadMs:performance.now()-started};
@@ -114,9 +148,9 @@ async function create({rpc,directory,appDirectory=path.join(__dirname,'app'),onP
       await rpc.request({command:'verify-function',address:rpc.a.sdk+entry.offset,hex:entry.bytes.slice(0,512)});
     const lookup=rpc.a.sdk+0x45c288;
     await rpc.request({command:'verify-function',address:lookup,
-      hex:require('../vendor/HBLauncher/smilebasic/reference/sdk-checks.cjs').bytes(0x45c288,16).toString('hex')});
+      hex:require('../vendor/GPUBrewLauncher/smilebasic/reference/sdk-checks.cjs').bytes(0x45c288,16).toString('hex')});
     await rpc.request({command:'verify-function',address:rpc.a.sdk+0x586fb0,
-      hex:require('../vendor/HBLauncher/sdk/native/ipc-functions.json').copy.hex});
+      hex:require('../vendor/GPUBrewLauncher/sdk/native/ipc-functions.json').copy.hex});
     const module=await readJSON(path.join(directory,'compatibility-module.json')),verified=new Set([lookup]);
     for(const name of ['vkAcquireNextImage2KHR','vkQueueSubmit','vkQueuePresentKHR','vkQueueWaitIdle']){
       const symbol=module.symbols.find(row=>row.name===name&&row.section&&row.type===2);
@@ -127,28 +161,24 @@ async function create({rpc,directory,appDirectory=path.join(__dirname,'app'),onP
     const allocation=await rpc.call(5732112,[rpc.output,4096,0x400000]);
     check(allocation.result===0n,'Frame worker allocation failed');base=Number(allocation.output.readBigUInt64LE());
     check(Number.isSafeInteger(base)&&base>0&&base%4096===0,'Invalid owned frame worker allocation');
-    const state=frameData({base,resources:menu.resources,commands:gpu.commands});await rpc.write(state.control,state.data);
+    const state=frameData({base,resources:menu.resources,commands:gpu.commands});await writeChunks(rpc,state.control,state.data);
     const inspection=await readJSON(path.join(directory,'input-inspection.json'));
-    check(inspection.session===rpc.a.session,'Input belongs to another session');
-    const inputs=[];
-    for(const [index,kind]of ['Handheld','FullKey','JoyDual','JoyLeft','JoyRight'].entries()){
-      const match=Object.entries(inspection.imports).find(([name])=>name.includes('GetNpadState')&&name.includes('Npad'+kind+'State'));
-      if(!match?.[1]?.bytes){check(index!==0,'Required handheld input is missing');continue;}
-      const entry=match[1];
-      check(Number((await rpc.read(rpc.a.main+entry.slot,8)).readBigUInt64LE())===entry.target,'Controller import changed');
-      await rpc.request({command:'verify-function',address:entry.target,hex:entry.bytes.slice(0,64)});verified.add(entry.target);
-      inputs.push({address:entry.target,args:[index===0?menu.controls.mapped:mapped+2048+(index-1)*64,
-        state.control+(index===0?0x230:0x234)]});
-    }
+    const {inputs,touch}=await qualifyInputs({rpc,inspection,controls:menu.controls.mapped,mapped,control:state.control,verified});
+    report.touch=touch;
     const plan=frameCalls({sdk:rpc.a.sdk,...state,resources:menu.resources,commands:gpu.commands,
       functions:menu.functions,inputs,lookup});checks=plan.checks;
-    program=await require('../vendor/HBLauncher/sdk/native/repeating.cjs').prepare(rpc,{base,code,calls:plan.calls,verified});
+    program=await require('../vendor/GPUBrewLauncher/sdk/native/repeating.cjs').prepare(nativeRpc,{base,code,calls:plan.calls,verified});
     report.frameBytes=program.frame.length;report.framesPerCycle=12;
+    threadUncertain=true;
     check((await rpc.callAddress(rpc.a.sdk+code.create.offset,[base,0,rpc.a.sdk+code.longjmp.offset,program.live])).result===0n,
       'Native frame worker did not start');
-    thread=(await rpc.read(base,8)).readBigUInt64LE();check(thread!==0n,'Invalid frame worker identity');
+    thread=(await rpc.read(base,8)).readBigUInt64LE();check(thread!==0n,'Invalid frame worker identity');threadUncertain=false;
     report.thread=String(thread);report.threadRunning=true;await save();
-    transport=P.createTransport({rpc,mapped});
+    receiver=await require('./receiver.cjs').create({rpc,mapped,directory,onProgress});
+    report.receiver=receiver.report;
+    report.transportMode=transportMode;
+    transport=P.createTransport({rpc,mapped,upload:request=>selectTransportMode(transportMode,request.packet.length)==='dedicated'?
+      receiver.upload(request):writeChunks(rpc,request.address,request.packet)});
     const deadline=Date.now()+10000;
     for(;;){
       const results=await rpc.read(program.results,program.addresses.length*8);
@@ -165,8 +195,17 @@ async function create({rpc,directory,appDirectory=path.join(__dirname,'app'),onP
     let lastResults=0;
     return {
       report,
+      abortPending,
       get publishedFrameSeq(){return transport.publishedFrameSeq;},
-      publish:(bytes,ptsMs)=>transport.publish(bytes,ptsMs),
+      async publish(bytes,ptsMs,format){publications++;try{return await transport.publish(bytes,ptsMs,format);}finally{publications--;}} ,
+      // compare transports with the same mapping, renderer and sequence stream.
+      async setTransportMode(mode){
+        check(mode==='rpc'||mode==='dedicated','Invalid media benchmark transport');
+        check(!closed&&publications===0,'Media publication must drain before changing transport');
+        const state=await transport.poll();
+        check(publications===0&&state.activeFrameSeq===transport.publishedFrameSeq,'GPU must acknowledge the last frame before changing transport');
+        transportMode=mode;report.transportMode=mode;
+      },
       async poll(){
         const result=await transport.poll();
         if(Date.now()-lastResults>2000){
@@ -177,17 +216,23 @@ async function create({rpc,directory,appDirectory=path.join(__dirname,'app'),onP
         return result;
       },
       async close(){
-        if(closed)return;closed=true;await transport.close();
+        if(closed)return;closed=true;
+        let cleanupError;
+        try{await abortPending();}catch(error){cleanupError=error;}
+        await transport.close();
         try{
           await stopWorker();
+          if(cleanupError)throw cleanupError;
           report.completed=new Date().toISOString();report.transport=transport.stats;await save();
-        }catch(error){report.error=error.message;await save();throw error;}
+        }catch(error){error.cleanupBlocked=true;report.cleanupBlocked=true;report.error=error.message;await save();throw error;}
       }
     };
   }catch(error){
     report.error=error.message;
-    try{await transport?.close();await stopWorker();}catch(cleanupError){report.cleanupError=cleanupError.message;}
+    if(threadUncertain){report.cleanupBlocked=true;error.cleanupBlocked=true;try{await program?.stop();}catch{}}
+    try{await abortPending();}catch(cleanupError){report.cleanupError=cleanupError.message;report.cleanupBlocked=true;error.cleanupBlocked=true;}
+    try{await transport?.close();await stopWorker();}catch(cleanupError){report.cleanupError=cleanupError.message;report.cleanupBlocked=true;error.cleanupBlocked=true;}
     report.threadRunning=thread!==null;await save();throw error;
   }
 }
-module.exports={create,setup,frameData,frameCalls,...P};
+module.exports={create,setup,frameData,frameCalls,writeChunks,qualifyInputs,selectTransportMode,...P};

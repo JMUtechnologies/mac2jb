@@ -7,7 +7,7 @@ CFLAGS := -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -arch $(ARCH) -is
 LDFLAGS := -arch $(ARCH) -L$(LIBUSBD_DIR) -lusbd -Wl,-rpath,@executable_path/$(LIBUSBD_DIR) -framework CoreFoundation -framework IOKit
 
 .PHONY: all clean check-deps
-all: check-deps mac2jb-send mac2jb-commands
+all: check-deps mac2jb-send mac2jb-commands mac2jb-keyboard
 
 # Additive preview target. The default v0.2.1 CLI build remains `make`.
 .PHONY: gui
@@ -25,9 +25,13 @@ mac2jb-commands: commands.c sender.c Makefile $(LIBUSBD_DIR)/libusbd.dylib
 	$(CC) $(CFLAGS) -o $@ commands.c $(LDFLAGS)
 	codesign -s - $@
 
+mac2jb-keyboard: keyboard.c sender.c Makefile $(LIBUSBD_DIR)/libusbd.dylib
+	$(CC) $(CFLAGS) -o $@ keyboard.c $(LDFLAGS)
+	codesign -s - $@
+
 $(LIBUSBD_DIR)/libusbd.dylib:
 	$(MAKE) -C $(LIBUSBD_DIR)
 
 clean:
-	rm -f mac2jb-send mac2jb-commands
+	rm -f mac2jb-send mac2jb-commands mac2jb-keyboard
 	$(MAKE) -C $(LIBUSBD_DIR) clean

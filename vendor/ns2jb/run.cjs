@@ -194,7 +194,7 @@ async function main(args = process.argv.slice(2)) {
   try {
     const connected = await listen({host, port, onWaiting() {
       console.log(`Waiting for Switch 2 at ${host}:${port}.`);
-      console.log('In a freshly opened SmileBASIC, load the saved bootstrap and enter:');
+      console.log('In a freshly opened SmileBASIC (or Demo), load or enter the bootstrap into slot 0 and run:');
       console.log('  RUN\n  REMOVE NSR,&H60000000,&H3FFFFFFF');
       console.log('After the expected Out of memory message, enter:');
       console.log('  ' + command);

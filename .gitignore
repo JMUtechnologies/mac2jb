@@ -2,6 +2,7 @@
 ._*
 mac2jb-send
 mac2jb-commands
+mac2jb-keyboard
 *.o
 *.dylib
 mac2jb-complete.zip
@@ -41,5 +42,9 @@ mac2jb-active-connect.txt
 /vendor/HBLauncher/runs/
 /vendor/HBLauncher/tools/
 /vendor/HBLauncher/dist/
+/vendor/GPUBrewLauncher/runs/
+/vendor/GPUBrewLauncher/tools/
+/vendor/GPUBrewLauncher/dist/
+*.kate-swp
 
 /runs/

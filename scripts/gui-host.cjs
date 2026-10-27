@@ -7,23 +7,27 @@ const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
 const {spawn} = require('node:child_process');
+const {selectedProfile, profileById, validStartCommand} = require('./host-profiles.cjs');
 const root = path.resolve(__dirname, '..');
-const timingDefaults = Object.freeze({delay: 50, enumerationTimeout: 4, loadWaitMs: 3000,
-  runWaitMs: 3000, removeWaitMs: 3000, loadConfirmWaitMs: 1000});
+const timingDefaults = Object.freeze({delay: 10, enumerationTimeout: 4, loadWaitMs: 1000,
+  runWaitMs: 1000, removeWaitMs: 1000, loadConfirmWaitMs: 1000});
 function hidSettings(args) {
-  const settings = {...timingDefaults, demo: false};
+  const settings = {...timingDefaults};
   const values = [...args];
   if (values.length && !values[0].startsWith('--')) settings.delay = Number(values.shift());
   const options = {'--enumeration-timeout': 'enumerationTimeout', '--load-wait-ms': 'loadWaitMs',
     '--run-wait-ms': 'runWaitMs', '--remove-wait-ms': 'removeWaitMs', '--load-confirm-wait-ms': 'loadConfirmWaitMs'};
   while (values.length) {
     const option = values.shift();
-    if (option === '--demo') {
-      if (settings.demo) throw Error('Duplicate HID option: --demo');
-      settings.demo = true;
-      continue;
+    if (option === "--demo") {
+      if (settings.demo) throw Error("Duplicate --demo.");
+      settings.demo = true; continue;
     }
     const text = values.shift();
+    if(option==='--preferred-controller') {
+      if(settings.preferredController!==undefined||!/^usb-drd(?:[0-9]|1[0-5])$/.test(text||''))throw Error('Invalid or duplicate preferred USB controller.');
+      settings.preferredController=text;continue;
+    }
     if (!options[option] || text === undefined || !/^\d+$/.test(text)) throw Error('Invalid HID timing option: ' + option);
     settings[options[option]] = Number(text);
   }
@@ -34,6 +38,29 @@ function hidSettings(args) {
     if (!Number.isInteger(value) || value < minimum || value > maximum) throw Error(`Invalid ${name}: use ${minimum}..${maximum}.`);
   }
   return settings;
+}
+function commandsOnlySettings(args, profile = profileById('BermTheSequel')) {
+  const timings=[];let csv,startCommand,startPrefix=false;
+  for(let index=0;index<args.length;index++) {
+    const option=args[index];
+    if(option==='--commands'||option==='--start-command') {
+      const value=args[++index];
+      if(value===undefined||(option==='--commands'?csv!==undefined:startCommand!==undefined))throw Error('Missing or duplicate '+option+'.');
+      if(option==='--commands')csv=value;else startCommand=value;
+    } else if(option==='--start-prefix') {
+      if(startPrefix)throw Error('Duplicate --start-prefix.');startPrefix=true;
+    } else timings.push(option);
+  }
+  const names=['load','run','remove','start'],commands=typeof csv==='string'?csv.split(','):[];
+  let previous=-1;
+  if(!commands.length||commands.some(name=>{const index=names.indexOf(name);if(index<=previous)return true;previous=index;return false;}))
+    throw Error('Choose a nonempty unique command subset in load,run,remove,start order.');
+  const selectedStart=commands.includes('start');
+  const validManual=validStartCommand(startCommand,profile);
+  if((startPrefix&&startCommand!==undefined)||((startPrefix||startCommand!==undefined)&&!selectedStart)||
+    (selectedStart&&!startPrefix&&!validManual))
+    throw Error(`Selected START needs either --start-prefix or the exact ${profile.startArgumentCount}-argument host START command.`);
+  return {...hidSettings(timings),commands,startPrefix,...(startCommand===undefined?{}:{startCommand})};
 }
 function emit(type, fields = {}) { process.stdout.write(JSON.stringify({type, ...fields}) + '\n'); }
 function lines(stream, callback, limit = 65536) {
@@ -50,13 +77,8 @@ function lines(stream, callback, limit = 65536) {
   });
   stream.on('end', () => {if (pending) callback(pending);});
 }
-function validStart(line, address) {
-  const match = /^V=START\((\d+(?:,\d+){4})\)$/.exec(line);
-  if (!match) return false;
-  const words = match[1].split(',').map(Number);
-  return words.every(Number.isSafeInteger) && words[0] === 39380 &&
-    words.slice(1, 5).every(n => n >= 0 && n <= 255) &&
-    words.slice(1, 5).join('.') === address;
+function validStart(line, address, profile = profileById('BermTheSequel')) {
+  return validStartCommand(line,profile,address);
 }
 function verifiedResult(result) {
   return result?.verified === true && result?.fs?.verified === true &&
@@ -83,6 +105,7 @@ function stop() {
 }
 async function host(address) {
   if (!net.isIPv4(address)) throw Error('Choose the Mac’s LAN IPv4 address.');
+  const profile = selectedProfile(root);
   const folder = path.join(root, 'vendor/ns2jb');
   const runs = path.join(folder, 'runs');
   fs.mkdirSync(runs, {recursive: true, mode: 0o700}); fs.chmodSync(runs, 0o700);
@@ -93,9 +116,9 @@ async function host(address) {
     throw Error('This session already has a pairing record. Stop it and start a fresh session.');
   current = spawn(process.execPath, ['run.cjs', address], {
     cwd: folder, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
-    // Match the fork's bundled five-argument bootstrap.
+    // Use the selected host's matching bootstrap without changing its source.
     // GUI sessions finish after verification, regardless of inherited settings.
-    env: {...process.env, NS2_BASIC_ARITY: '5', NS2_RPC_MODE: '0'}
+    env: {...process.env, NS2_BASIC_ARITY: String(profile.startArgumentCount), NS2_RPC_MODE: '0'}
   });
   const child = current;
   let published = false, directory, publicationError, networkFailure, networkTimer, progressed = false;
@@ -108,13 +131,13 @@ async function host(address) {
       signalGroup(child, 'SIGTERM');
       networkTimer = setTimeout(() => signalGroup(child, 'SIGKILL'), 2000); networkTimer.unref();
     }
-    if (validStart(clean, address) && !published && !stopping && !networkFailure) {
+    if (validStart(clean, address, profile) && !published && !stopping && !networkFailure) {
       const temporary = active + '.' + process.pid + '.tmp';
       fs.writeFileSync(temporary, `${child.pid}\n${clean}\n`, {mode: 0o600, flag: 'wx'});
       // link provides no-replace publication, unlike rename on an existing file.
       try {fs.linkSync(temporary, active);} finally {fs.unlinkSync(temporary);}
       published = true;
-      emit('host-ready', {message: 'Fresh host pairing is ready.'});
+      emit('host-ready', {startCommand: clean, message: 'Fresh host pairing is ready.'});
     }
     if (clean.startsWith('Run folder: ')) {
       const candidate = path.resolve(clean.slice('Run folder: '.length));
@@ -163,26 +186,42 @@ async function host(address) {
   return code || 1;
 }
 async function hid(kind, controller, settings = timingDefaults) {
-  if (!['bootstrap', 'commands'].includes(kind)) throw Error('Invalid transfer kind.');
+  const profile = selectedProfile(root);
+  if (settings.demo && !profile.supportsDemo) throw Error(`${profile.label} does not support the demo in this pinned build.`);
+  if (!['bootstrap', 'commands', 'commands-only', 'save-bootstrap'].includes(kind)) throw Error('Invalid transfer kind.');
   if (controller !== 'auto' && !/^usb-drd(?:[0-9]|1[0-5])$/.test(controller)) throw Error('Choose a controller from 0 to 15.');
-  const {delay, enumerationTimeout, loadWaitMs, runWaitMs, removeWaitMs, loadConfirmWaitMs, demo = false} = settings;
-  const candidates = controller === 'auto' ? ['usb-drd0', 'usb-drd1', 'usb-drd3'] : [controller];
-  const bootstrap = fs.readFileSync(path.join(root, 'assets/bootstrap.bas'), 'utf8');
-  const totalLines = (bootstrap.match(/\n/g) || []).length + (bootstrap && !bootstrap.endsWith('\n') ? 1 : 0);
+  if(controller!=='auto'&&settings.preferredController!==undefined)throw Error('A preferred controller is only available in Automatic mode.');
+  const {delay, enumerationTimeout, loadWaitMs, runWaitMs, removeWaitMs, loadConfirmWaitMs} = settings;
+  const candidates = controller === 'auto' ? [...new Set([...(settings.preferredController?[settings.preferredController]:[]),'usb-drd0','usb-drd1','usb-drd3'])] : [controller];
+  let safeFailures=0;
+  const saveBootstrap = kind === 'save-bootstrap';
+  const textTransfer = kind === 'bootstrap';
+  const commandNames=saveBootstrap?['SAVE']:kind==='commands-only'?settings.commands.map(name=>name.toUpperCase()):['LOAD','RUN','REMOVE','START'];
+  const commandTotal=commandNames.length;
+  const asset = 'assets/bootstrap.bas';
+  const source = textTransfer ? fs.readFileSync(path.join(root, asset)) : Buffer.alloc(0);
+  const text = source.toString('utf8');
+  const totalLines = (text.match(/\n/g) || []).length + (text && !text.endsWith('\n') ? 1 : 0);
+  const textName = 'bootstrap';
   for (const candidate of candidates) {
     if (stopping) break;
     emit('controller', {controller: candidate, message: `Waiting for ${candidate} to enumerate`});
-    const executable = path.join(root, kind === 'bootstrap' ? 'mac2jb-send' : 'mac2jb-commands');
-    const args = kind === 'bootstrap' ? ['assets/bootstrap.bas', '--delay-ms', String(delay)] : [
-      '--auto', '--delay-ms', String(delay), '--gui-events', '--enumeration-timeout', String(enumerationTimeout),
+    const executable = path.join(root, textTransfer ? 'mac2jb-send' : 'mac2jb-commands');
+    const args = textTransfer ? [asset, '--delay-ms', String(delay)] : [
+      '--auto', ...(kind !== 'bootstrap' && settings.demo ? ['--demo'] : []), '--delay-ms', String(delay), '--gui-events', '--enumeration-timeout', String(enumerationTimeout),
+      ...(profile.startArgumentCount === 9 ? ['--start-arity','9'] : []),
       '--load-wait-ms', String(loadWaitMs), '--run-wait-ms', String(runWaitMs),
       '--remove-wait-ms', String(removeWaitMs), '--load-confirm-wait-ms', String(loadConfirmWaitMs),
-      ...(demo ? ['--demo'] : [])];
+      ...(saveBootstrap ? ['--save-bootstrap'] : []),
+      ...(kind === 'commands-only' ? ['--commands',settings.commands.join(','),
+        ...(settings.startPrefix?['--start-prefix']:settings.startCommand?['--start-command',settings.startCommand]:[])] : [])];
     current = spawn(executable, args, {cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       env: {...process.env, MAC2JB_AUTO_WORKER: '1', MAC2JB_CONTROLLER: candidate,
         MAC2JB_ENUMERATION_TIMEOUT_SECONDS: String(enumerationTimeout)}});
     const child = current;
-    let output = '', typing = false, timedOut = false, announced = false, commandStep = 0, nativeEvents = false, nativeLineEvents = false;
+    let output = '', typing = false, timedOut = false, announced = false, commandStep = 0, nativeEvents = false, nativeLineEvents = false,prefixCompleted=false;
+    const completedCommands=new Set();
+    let saveStarted=false, saveProtocolInvalid=false;
     let timer, countdown;
     const started = performance.now();
     const enumerationProgress = () => {
@@ -190,38 +229,78 @@ async function hid(kind, controller, settings = timingDefaults) {
       emit('enumeration-progress', {controller: candidate, completed: elapsed, total: enumerationTimeout * 1000,
         remainingMs: Math.max(0, enumerationTimeout * 1000 - elapsed), durationMs: enumerationTimeout * 1000});
     };
-    const markTyping = () => {
+    const markPossibleInput = () => {
       typing = true; clearTimeout(timer); clearInterval(countdown);
-      if (!announced) {
+    };
+    const markTyping = () => {
+      markPossibleInput();
+      if (!announced&&!timedOut&&!stopping) {
         announced = true;
-        emit('typing', {kind, completed: 0, total: kind === 'commands' ? 4 : totalLines,
-          message: kind === 'commands' ? 'USB keyboard connected. Sending four commands.' : 'USB keyboard connected. Typing the bootstrap.'});
+        emit('typing', {kind, controller:candidate,completed: 0, total: textTransfer ? totalLines : commandTotal,
+          message: saveBootstrap ? 'USB keyboard connected. Typing the SAVE command.' : kind==='commands' ? 'USB keyboard connected. Sending four commands.' : !textTransfer ? `USB keyboard connected. Sending ${commandTotal} selected command${commandTotal===1?'':'s'}.` : `USB keyboard connected. Typing the ${textName}.`});
       }
     };
     const observe = line => {
       output += line + '\n';
       if (line.startsWith('MAC2JB_GUI ')) {
         let event;
-        try {event = JSON.parse(line.slice('MAC2JB_GUI '.length));} catch {return;}
-        if (!event || typeof event !== 'object' || Array.isArray(event)) return;
+        try {event = JSON.parse(line.slice('MAC2JB_GUI '.length));} catch {
+          if (saveBootstrap) {markPossibleInput(); saveProtocolInvalid=true;} return;
+        }
+        if (!event || typeof event !== 'object' || Array.isArray(event)) {
+          if (saveBootstrap) {markPossibleInput(); saveProtocolInvalid=true;} return;
+        }
+        if (saveBootstrap) {
+          markPossibleInput();
+          const validTyping=event.type==='typing'&&event.completed===0&&event.total===1&&!saveStarted&&completedCommands.size===0;
+          const validCommand=['command-start','command-complete'].includes(event.type)&&event.step===1&&event.total===1&&event.label==='SAVE'&&
+            event.completed===(event.type==='command-start'?0:1)&&completedCommands.size===0&&
+            (event.type==='command-start'?!saveStarted:saveStarted);
+          if ((!validTyping&&!validCommand)||saveProtocolInvalid) {saveProtocolInvalid=true; return;}
+          if (event.type==='command-start') saveStarted=true;
+        }
         if (event.type === 'line-start' || event.type === 'line-complete') {
-          if (kind !== 'bootstrap' || !Number.isSafeInteger(event.line) ||
+          markPossibleInput();
+          if (!textTransfer || !Number.isSafeInteger(event.line) ||
               !Number.isSafeInteger(event.completed) || event.total !== totalLines ||
               event.line < 1 || event.line > totalLines ||
               event.completed !== event.line - (event.type === 'line-start' ? 1 : 0)) return;
           nativeLineEvents = true;
           markTyping();
           emit(event.type, {kind, line: event.line, completed: event.completed, total: totalLines,
-            message: `${event.type === 'line-start' ? 'Typing' : 'Sent'} line ${event.line} of ${totalLines}`});
+            message: `${event.type === 'line-start' ? 'Typing' : 'Sent'} line ${event.line} of ${totalLines}`,
+            ...(Number.isFinite(event.remainingMs) && event.remainingMs >= 0 ? {remainingMs: event.remainingMs} : {})});
           return;
         }
         nativeEvents = true;
-        if (['typing', 'command-start', 'command-complete'].includes(event.type)) markTyping();
+        if (['typing', 'command-start', 'command-complete','command-prefix-complete','wait'].includes(event.type)) markPossibleInput();
+        if(event.type==='typing'&&!textTransfer&&event.completed===0&&event.total===commandTotal)markTyping();
+        if(event.type==='command-prefix-complete') {
+          if(kind!=='commands-only'||!settings.startPrefix||prefixCompleted||event.step!==commandTotal||
+            event.completed!==commandTotal-1||event.total!==commandTotal||event.label!=='START'||
+            event.prefix!=='V=START(39380,'||event.startPending!==true||completedCommands.size!==commandTotal-1)return;
+          prefixCompleted=true;
+          markTyping();
+          emit(event.type,{kind,step:event.step,completed:event.completed,total:commandTotal,label:'START',startPending:true});return;
+        }
         if (event.type === 'command-start' || event.type === 'command-complete') {
+          if(textTransfer||!Number.isSafeInteger(event.step)||event.step<1||event.step>commandTotal||
+            event.total!==commandTotal||event.label!==commandNames[event.step-1]||
+            event.completed!==event.step-(event.type==='command-start'?1:0))return;
+          if(kind==='commands-only'&&(!Number.isSafeInteger(event.step)||event.step<1||event.step>commandTotal||
+            event.total!==commandTotal||event.label!==commandNames[event.step-1]||
+            event.completed!==event.step-(event.type==='command-start'?1:0)||
+            event.step!==completedCommands.size+1||
+            (event.type==='command-complete'&&settings.startPrefix&&event.label==='START')))return;
+          if(event.type==='command-complete')completedCommands.add(event.step);
+          markTyping();
           commandStep = event.step;
-          emit(event.type, {kind, step: event.step, completed: event.completed, total: 4, label: event.label});
+          emit(event.type, {kind, step: event.step, completed: event.completed, total: commandTotal, label: event.label});
         } else if (event.type === 'wait') {
-          emit('wait', {kind, completed: event.completed, total: 4, label: event.label,
+          if(kind==='commands-only'&&(event.total!==commandTotal||!Number.isSafeInteger(event.completed)||
+            event.completed<1||event.completed>commandTotal||
+            !(commandNames.includes(event.label)||(event.label==='LOAD confirmation'&&commandNames.includes('LOAD')))))return;
+          emit('wait', {kind, completed: event.completed, total: commandTotal, label: event.label,
             remainingMs: event.remainingMs, durationMs: event.durationMs});
         }
         return;
@@ -230,7 +309,7 @@ async function hid(kind, controller, settings = timingDefaults) {
         markTyping();
       }
       const progress = /Sent line (\d+)/.exec(line);
-      if (progress && kind === 'bootstrap' && !nativeLineEvents) {
+      if (progress && textTransfer && !nativeLineEvents) {
         const completed = Number(progress[1]);
         if (Number.isSafeInteger(completed) && completed >= 1 && completed <= totalLines)
           emit('progress', {kind, line: Math.min(completed + 1, totalLines), completed, total: totalLines});
@@ -238,8 +317,8 @@ async function hid(kind, controller, settings = timingDefaults) {
       if (line.startsWith('Sending: ')) {
         if (!nativeEvents) {
           commandStep++;
-          emit('command-start', {kind, step: commandStep, completed: commandStep-1, total: 4,
-            label: ['LOAD', 'RUN', 'REMOVE', 'START'][commandStep-1] || 'command'});
+          emit('command-start', {kind, step: commandStep, completed: commandStep-1, total: commandTotal,
+            label: commandNames[commandStep-1] || 'command'});
         }
         emit('command', {message: line});
       }
@@ -269,8 +348,18 @@ async function hid(kind, controller, settings = timingDefaults) {
       clearTimeout(timer); clearInterval(countdown); clearTimeout(stopTimer);
     }
     if (stopping) break;
-    if (code === 0 && !signal) {emit('transfer-complete', {kind, message: 'Keyboard transfer completed. Check the Switch screen.'}); return 0;}
-    if (signal && !timedOut) {
+    if (code === 0 && !signal&&!timedOut) {
+      if (saveBootstrap && (saveProtocolInvalid || !saveStarted || completedCommands.size!==1)) {
+        emit('failed',{partial:typing,message:'SAVE command completion was not confirmed. Inspect the Switch before trying again.'});return 1;
+      }
+      if(kind==='commands-only'&&(completedCommands.size!==commandTotal-(settings.startPrefix?1:0)||
+        (settings.startPrefix&&!prefixCompleted))) {
+        emit('failed',{partial:typing,message:'Selected command completion was not confirmed. Inspect the Switch before trying again.'});return 1;
+      }
+      emit('transfer-complete', {kind,...(saveBootstrap||kind==='commands-only'?{total:commandTotal,completed:completedCommands.size,...(settings.startPrefix?{startPending:true}:{})}:{}),message: saveBootstrap ? 'SAVE command submitted. Confirm any save or overwrite prompt on the Switch, then confirm saving in the app.' : kind === 'commands-only' ?
+        (settings.startPrefix?'Selected commands typed. Finish START manually; Enter has not been sent.':'Selected commands typed. No host was started and no exploit result was checked.') : 'Keyboard transfer completed. Check the Switch screen.'}); return 0;
+    }
+    if (signal && !(timedOut&&['SIGTERM','SIGKILL'].includes(signal))) {
       const helper = path.basename(executable);
       emit('failed', {helper, signal, controller: candidate, partial: typing,
         message: `USB helper ${helper} terminated by ${signal} on ${candidate}. ` +
@@ -281,18 +370,23 @@ async function hid(kind, controller, settings = timingDefaults) {
     if (typing) {
       emit('failed', {partial: true, message: 'Input may be partial. Automatic retry was stopped. Inspect and clear the Switch input before trying again.'}); return 1;
     }
-    const enumerationError = /USB host did not enumerate|USB enumeration error|selected controller|device did not enumerate|not enumerated|Waiting for USB host enumeration|USB host enumeration failed/i.test(output);
-    if (!timedOut && !enumerationError) {
+    const enumerationError = /^USB host did not enumerate a keyboard(?:\.| on selected controller\. Check data role, cable, and host USB descriptors\.)?$/m.test(output);
+    const initializationError=/^(?:libusbd_init failed\b|USB configuration failed\b|USB interface setup failed\b|USB enumeration error(?::|\s)|USB keyboard enumeration failed\b)/m.test(output);
+    const safeEnumerationFailure=!initializationError&&((timedOut&&(['SIGTERM','SIGKILL'].includes(signal)||[1,130].includes(code)))||(!signal&&code===1&&enumerationError));
+    if (!safeEnumerationFailure) {
       emit('failed', {message: 'USB initialization failed. Check that the approved usbgadget driver is installed and loaded.'}); return code || 1;
     }
+    safeFailures++;
     emit('log', {message: `${candidate} did not enumerate; no typing was detected.`});
   }
   if (stopping) {emit('cancelled', {message: 'Transfer stopped. Inspect the Switch for partial input.'}); return 130;}
-  emit('failed', {message: 'No controller connected. The Mac must NOT be supplying charging power to the Switch. Unplug and replug the Mac end of a data cable to renegotiate, then verify that power is directed toward the Mac. Software cannot force the power role. You can also choose a controller manually.'}); return 1;
+  emit('failed', {...(safeFailures===candidates.length?{retrySafe:true}:{}),message: 'No controller connected. The Mac must NOT be supplying charging power to the Switch. Unplug the USB-C cable from the Switch, wait about one second, then plug it back into the Switch and verify that power is directed toward the Mac. Software cannot force the power role. You can also choose a controller manually.'}); return 1;
 }
 async function main(args = process.argv.slice(2)) {
-  if (args[0] === 'host' && args.length === 3 && args[2] === '--post-run-options')
+  if (args[0] === 'host' && args.length === 3 && args[2] === '--post-run-options') {
+    if (!selectedProfile(root).supportsHeldRPC) throw Error('The selected host does not provide held RPC.');
     return require('./gui-session.cjs').main({root, address: args[1], emit, lines, verifiedResult});
+  }
   if (args.length === 1 && args[0] === '--self-test') {
     const address = '192.0.2.1';
     const value = 'V=START(' + [39380, ...address.split('.')].join(',') + ')';
@@ -306,10 +400,12 @@ async function main(args = process.argv.slice(2)) {
   }
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
   if (args[0] === 'host' && args.length === 2) return host(args[1]);
+  if (args[0] === 'hid' && args[1] === 'commands-only')
+    return hid(args[1], args[2], commandsOnlySettings(args.slice(3),selectedProfile(root)));
   if (args[0] === 'hid' && args.length >= 3) return hid(args[1], args[2], hidSettings(args.slice(3)));
-  throw Error('Usage: gui-host.cjs host IPv4 | hid bootstrap|commands auto|usb-drdN [delay-ms] [--demo]');
+  throw Error('Usage: gui-host.cjs host IPv4 | hid bootstrap|commands|save-bootstrap auto|usb-drdN [delay-ms] | hid commands-only auto|usb-drdN [delay-ms] --commands CSV [--start-prefix|--start-command TEXT]');
 }
-module.exports = {validStart, verifiedResult, hidSettings, lines, main, networkBindFailure, networkUnavailableMessage};
+module.exports = {validStart, verifiedResult, hidSettings,commandsOnlySettings, lines, main, networkBindFailure, networkUnavailableMessage};
 if (require.main === module) main().then(code => {process.exitCode = code;}).catch(error => {
   signalGroup(current, 'SIGTERM'); emit('failed', {message: error.message}); process.exitCode = 1;
 });

@@ -32,12 +32,15 @@ if ! python3 scripts/prepare-homebrew-runtime.py --check; then
 fi
 
 "$NODE_BINARY" scripts/prepare-bootstrap.cjs --check
+"$NODE_BINARY" scripts/prepare-host-profiles.cjs --check
 "$NODE_BINARY" scripts/prepare-homebrew-apps.cjs --check
+"$NODE_BINARY" scripts/prepare-izlauncher.cjs --check-source
 "$NODE_BINARY" scripts/gui-ouncecake.cjs --self-test
 shasum -a 256 -c assets/bootstrap.bas.sha256
 bash scripts/install-driver.sh --verify
 (cd vendor/ns2jb && shasum -a 256 -c SHA256SUMS >/dev/null)
 (cd vendor/HBLauncher && shasum -a 256 -c ../../packaging/HBLauncher-v0.2.0-SHA256SUMS >/dev/null)
+(cd vendor/GPUBrewLauncher && shasum -a 256 -c ../../packaging/GPUBrewLauncher-SHA256SUMS >/dev/null)
 # Force a fresh GUI-payload build so stale CLI artifacts cannot retain the
 # builder's newer default deployment target. The regular CLI defaults stay as-is.
 MACOSX_DEPLOYMENT_TARGET=14.0 make -B
@@ -50,9 +53,10 @@ PAYLOAD="$STAGE/runtime"
 mkdir -p "$PAYLOAD/vendor/libusbd" "$PAYLOAD/licenses"
 # GUI-only tuning and progress must never change the legacy CLI executables.
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
-for tool in send commands; do
+for tool in send commands keyboard; do
   source=commands.c
   [[ "$tool" == send ]] && source=sender.c
+  [[ "$tool" == keyboard ]] && source=keyboard.c
   xcrun clang -std=c11 -D_POSIX_C_SOURCE=200809L -DMAC2JB_GUI=1 -O2 -Wall -Wextra \
     -target arm64-apple-macos14.0 -isysroot "$SDK" -Ivendor/libusbd/include \
     "$source" -Lvendor/libusbd -lusbd -Wl,-rpath,@executable_path/vendor/libusbd \
@@ -75,12 +79,12 @@ while IFS= read -r dependency; do
 done < <(otool -L "$PAYLOAD/node" | tail -n +2 | awk '{print $1}')
 cp "$NODE_LICENSE" "$PAYLOAD/licenses/node-LICENSE.txt"
 cp -R "$BUILD/homebrew" "$PAYLOAD/homebrew"
-chmod 700 "$PAYLOAD/node" "$PAYLOAD/mac2jb-send" "$PAYLOAD/mac2jb-commands"
+chmod 700 "$PAYLOAD/node" "$PAYLOAD/mac2jb-send" "$PAYLOAD/mac2jb-commands" "$PAYLOAD/mac2jb-keyboard"
 python3 - "$PAYLOAD" <<'PY'
 import re, subprocess, sys
 from pathlib import Path
 root = Path(sys.argv[1])
-for name in ['node', 'mac2jb-send', 'mac2jb-commands', 'vendor/libusbd/libusbd.dylib']:
+for name in ['node', 'mac2jb-send', 'mac2jb-commands', 'mac2jb-keyboard', 'vendor/libusbd/libusbd.dylib']:
     info = subprocess.check_output(['xcrun', 'vtool', '-show-build', str(root/name)], text=True)
     versions = re.findall(r'\bminos\s+(\d+(?:\.\d+)*)', info)
     if not versions: raise SystemExit('Missing deployment target: '+name)
@@ -106,18 +110,18 @@ marker = json.dumps({'testBuild': test_build}, indent=2)+'\n'
 (source/'packaging').mkdir(parents=True, exist_ok=True)
 (payload/'packaging/test-build.json').write_text(marker)
 (source/'packaging/test-build.json').write_text(marker)
-files = ['README.md', 'LICENSE', '.gitignore', 'Makefile', 'sender.c', 'commands.c',
+files = ['README.md', 'LICENSE', '.gitignore', 'Makefile', 'sender.c', 'commands.c', 'keyboard.c',
          'indent-test.bas', 'upstream.lock', 'mac2jb.command', 'setup.sh',
          'fetch-bootstrap.sh', 'make-release-zip.command']
-folders = ['gui', 'scripts', 'packaging', 'docs', 'drivers', 'assets', 'vendor', 'stremio', '.github']
+folders = ['gui', 'scripts', 'packaging', 'drivers', 'assets', 'vendor', 'stremio', '.github']
 blocked = {'.git', 'runs', 'dumps', '__pycache__', 'xcuserdata', 'project.xcworkspace',
            'usb_device', '.DS_Store'}
-suffixes = {'.o', '.dylib', '.log', '.pyc', '.bak', '.xcuserstate'}
+suffixes = {'.o', '.dylib', '.log', '.pyc', '.bak', '.xcuserstate', '.kate-swp'}
 def safe(path):
     if path.parts[-2:] == ('packaging','test-build.json'): return False
-    if path.parts[:2] == ('vendor', 'HBLauncher') and len(path.parts)>2 and path.parts[2] in ('tools', 'dist'): return False
+    if path.parts[0:1] == ('vendor',) and len(path.parts)>2 and path.parts[1] in ('HBLauncher', 'GPUBrewLauncher') and path.parts[2] in ('tools', 'dist'): return False
     if 'usbgadget.kext' in path.parts and 'drivers' not in path.parts: return False
-    return (not any(part in blocked or part.startswith('._') for part in path.parts)
+    return (not any(part in blocked or part.startswith('._') or part.endswith('.dSYM') for part in path.parts)
             and path.suffix not in suffixes and not path.is_symlink())
 def copy(src, dst):
     if not safe(src.relative_to(root)) or not safe(src): return
@@ -129,10 +133,18 @@ for name in files:
 for name in folders:
     if (root/name).exists():
         for src in sorted((root/name).rglob('*')): copy(src, source/src.relative_to(root))
-for name in ['vendor/ns2jb', 'vendor/HBLauncher', 'vendor/OunceCake', 'assets', 'drivers', 'stremio']:
+for name in ['vendor/ns2jb', 'vendor/ns2jb-hosts', 'vendor/HBLauncher', 'vendor/GPUBrewLauncher', 'vendor/IZ2S-Platform', 'vendor/OunceCake', 'assets', 'drivers', 'stremio']:
     for src in sorted((root/name).rglob('*')): copy(src, payload/src.relative_to(root))
 for name in ['scripts/gui-host.cjs', 'scripts/gui-session.cjs', 'scripts/gui-dump.cjs',
+             'scripts/gui-attach.cjs', 'scripts/rpc-attachment.cjs',
+             'scripts/host-profiles.cjs', 'scripts/prepare-host-profiles.cjs', 'packaging/host-profiles.json',
              'scripts/gui-homebrew.cjs', 'scripts/gui-stremio.cjs', 'scripts/check-homebrew-runtime.cjs',
+             'scripts/gui-hblauncher.cjs', 'packaging/HBLauncher-v0.2.0-SHA256SUMS',
+             'scripts/gui-gpubrewlauncher.cjs', 'packaging/GPUBrewLauncher-provenance.json',
+             'packaging/GPUBrewLauncher-SHA256SUMS',
+             'scripts/gui-izlauncher.cjs', 'scripts/prepare-izlauncher.cjs', 'scripts/check-izlauncher-runtime.cjs',
+             'packaging/IZ2S-Platform-provenance.json', 'packaging/IZ2S-Platform-SHA256SUMS',
+             'scripts/gui-keyboard.cjs',
              'scripts/prepare-homebrew-apps.cjs', 'scripts/check-stremio-runtime.cjs',
              'scripts/gui-ouncecake.cjs', 'packaging/OunceCake-provenance.json',
              'packaging/OunceCake-SHA256SUMS', 'packaging/OunceCake-upstream-SHA256SUMS',
@@ -152,8 +164,11 @@ provenance = {
 (payload/'licenses/node-provenance.json').write_text(json.dumps(provenance, indent=2)+'\n')
 PY
 
-# Add released apps after copying the frozen HBLauncher tree.
+# Add released apps after copying both frozen launcher trees.
 "$NODE_BINARY" scripts/prepare-homebrew-apps.cjs --install "$PAYLOAD/vendor/HBLauncher/apps"
+"$NODE_BINARY" scripts/prepare-homebrew-apps.cjs --install "$PAYLOAD/vendor/GPUBrewLauncher/apps"
+"$NODE_BINARY" scripts/prepare-izlauncher.cjs --prepare "$PAYLOAD"
+"$NODE_BINARY" "$PAYLOAD/scripts/check-izlauncher-runtime.cjs"
 
 python3 - "$PAYLOAD" "$BUILD" "$SOURCE_ARCHIVE" <<'PY'
 import gzip, hashlib, json, os, sys, tarfile, zipfile
@@ -168,7 +183,7 @@ with archive.open('wb') as stream, gzip.GzipFile(filename='', mode='wb', fileobj
             entry = tar.gettarinfo(str(path), arcname=relative)
             entry.uid = entry.gid = 0; entry.uname = entry.gname = ''; entry.mtime = 0
             entry.mode = 0o700 if path.is_dir() or relative in (
-                'node','mac2jb-send','mac2jb-commands', 'homebrew/bin/spirv-val',
+                'node','mac2jb-send','mac2jb-commands','mac2jb-keyboard', 'homebrew/bin/spirv-val',
                 'homebrew/python/bin/python3', 'homebrew/python/bin/python3.13') else 0o600
             if path.is_file():
                 with path.open('rb') as file: tar.addfile(entry, file)

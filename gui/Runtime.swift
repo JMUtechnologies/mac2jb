@@ -9,6 +9,12 @@ private func embeddedPayloadSize() -> UInt
 
 struct BundledRuntime {
     let root: URL
+    var host: HostProfile {
+        guard let data = try? Data(contentsOf: root.appendingPathComponent("selected-host.json")),
+              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = value["id"] as? String else { return .bermTheSequel }
+        return HostProfile(rawValue: id) ?? .bermTheSequel
+    }
 
     enum RuntimeError: LocalizedError {
         case invalid(String)
@@ -19,7 +25,7 @@ struct BundledRuntime {
 
     // Each launch has its own host files and pairing state. A prior session's
     // pairing command can never be consumed by a new GUI launch.
-    static func prepare(sessionParent: URL? = nil) throws -> BundledRuntime {
+    static func prepare(sessionParent: URL? = nil, host: HostProfile = .bermTheSequel) throws -> BundledRuntime {
         umask(0o077)
         guard let bytes = embeddedPayloadBytes(), embeddedPayloadSize() > 0 else {
             throw RuntimeError.invalid("The offline runtime is missing from this app. Rebuild or download a complete app.")
@@ -42,9 +48,14 @@ struct BundledRuntime {
             try privateDirectory(appDirectory)
             try privateDirectory(sessions)
         }
-        // FileManager's directory enumerator canonicalizes /var to /private/var
-        // on macOS. Use the same canonical root for executable permissions.
-        let root = sessions.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString, isDirectory: true)
+        // Foundation preserves some macOS aliases (/var and /tmp) that Node
+        // resolves. Use Darwin's canonical path for every helper and path gate.
+        guard let resolvedSessions = realpath(sessions.path, nil) else {
+            throw RuntimeError.invalid("Unable to resolve the private session directory.")
+        }
+        let canonicalSessions = URL(fileURLWithPath: String(cString: resolvedSessions), isDirectory: true)
+        free(resolvedSessions)
+        let root = canonicalSessions.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try manager.createDirectory(at: root, withIntermediateDirectories: false,
                                     attributes: [.posixPermissions: 0o700])
         do {
@@ -70,7 +81,7 @@ struct BundledRuntime {
             _ = try tar(["-xzf", archive.path, "-C", root.path,
                          "--no-same-owner", "--no-same-permissions"])
             try manager.removeItem(at: archive)
-            let executablePaths = Set(["node", "mac2jb-send", "mac2jb-commands",
+            let executablePaths = Set(["node", "mac2jb-send", "mac2jb-commands", "mac2jb-keyboard",
                                        "homebrew/bin/spirv-val", "homebrew/python/bin/python3",
                                        "homebrew/python/bin/python3.13"])
             if let walker = manager.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
@@ -79,7 +90,11 @@ struct BundledRuntime {
                     guard properties.isSymbolicLink != true else {
                         throw RuntimeError.invalid("The extracted runtime contains an unsupported link.")
                     }
-                    let canonicalPath = url.resolvingSymlinksInPath().path
+                    guard let resolvedEntry = realpath(url.path, nil) else {
+                        throw RuntimeError.invalid("An extracted runtime file could not be resolved.")
+                    }
+                    let canonicalPath = String(cString: resolvedEntry)
+                    free(resolvedEntry)
                     guard canonicalPath.hasPrefix(root.path + "/") else {
                         throw RuntimeError.invalid("The extracted runtime contains a path outside its session folder.")
                     }
@@ -88,13 +103,25 @@ struct BundledRuntime {
                     try manager.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
                 }
             }
-            for path in ["node", "mac2jb-send", "mac2jb-commands", "vendor/libusbd/libusbd.dylib",
+            for path in ["node", "mac2jb-send", "mac2jb-commands", "mac2jb-keyboard", "vendor/libusbd/libusbd.dylib",
+                         "scripts/gui-keyboard.cjs",
                          "scripts/gui-host.cjs", "scripts/gui-session.cjs", "scripts/gui-dump.cjs",
+                         "scripts/gui-attach.cjs", "scripts/rpc-attachment.cjs",
+                         "scripts/host-profiles.cjs", "scripts/prepare-host-profiles.cjs", "packaging/host-profiles.json",
+                         "vendor/ns2jb-hosts/pepsipu/run.cjs", "vendor/ns2jb-hosts/kurumuz/run.cjs",
                          "scripts/gui-homebrew.cjs", "scripts/gui-stremio.cjs", "stremio/pipeline.cjs", "stremio/app/app.json", "scripts/check-homebrew-runtime.cjs",
+                         "scripts/gui-hblauncher.cjs", "vendor/HBLauncher/homebrew-launcher/launcher.cjs",
+                         "vendor/HBLauncher/apps/ftpd-sb/app.json", "packaging/HBLauncher-v0.2.0-SHA256SUMS",
+                         "scripts/gui-gpubrewlauncher.cjs", "vendor/GPUBrewLauncher/homebrew-launcher/launcher.cjs",
+                         "vendor/GPUBrewLauncher/CREDITS", "packaging/GPUBrewLauncher-SHA256SUMS",
+                         "scripts/gui-izlauncher.cjs", "scripts/prepare-izlauncher.cjs", "scripts/check-izlauncher-runtime.cjs",
+                         "vendor/IZ2S-Platform/LICENSE", "packaging/IZ2S-Platform-SHA256SUMS",
+                         "packaging/IZ2S-Platform-provenance.json", "homebrew/IZ2S-Platform/mac2jb-runtime.json",
+                         "homebrew/IZ2S-Platform/shells/izlauncher/server/runtime.cjs",
+                         "homebrew/IZ2S-Platform/modules/iz-exchange/iz-exchange.izm",
                          "scripts/gui-ouncecake.cjs", "vendor/OunceCake/LICENSE", "vendor/OunceCake/engine/oz-code/native.bin",
                          "packaging/OunceCake-provenance.json", "packaging/OunceCake-SHA256SUMS",
                          "homebrew/manifest.json", "homebrew/fonts/DejaVuSans.ttf",
-                         "vendor/HBLauncher/homebrew-launcher/launcher.cjs",
                          "scripts/install-driver.sh", "drivers/SHA256SUMS",
                          "drivers/usbgadget.kext/Contents/MacOS/usbgadget",
                          "vendor/ns2jb/run.cjs", "assets/bootstrap.bas", "source/LICENSE"] {
@@ -106,6 +133,19 @@ struct BundledRuntime {
                 guard manager.isExecutableFile(atPath: root.appendingPathComponent(path).path) else {
                     throw RuntimeError.invalid("The embedded helper is not executable: \(path).")
                 }
+            }
+            let select = Process()
+            select.executableURL = root.appendingPathComponent("node")
+            select.arguments = [root.appendingPathComponent("scripts/prepare-host-profiles.cjs").path,
+                                "--select", host.rawValue, root.path]
+            select.currentDirectoryURL = root
+            let output = Pipe()
+            select.standardOutput = output; select.standardError = output
+            try select.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            select.waitUntilExit()
+            guard select.terminationStatus == 0 else {
+                throw RuntimeError.invalid("Unable to prepare \(host.label): \(String(decoding: data, as: UTF8.self))")
             }
             return BundledRuntime(root: root)
         } catch {
